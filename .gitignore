@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+
+# Logs
+*.log
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Environment
+.env
+
+# Chat history
+chat_history/

@@ -1,0 +1,12 @@
+{
+  "name": "OJT DTR Tracker",
+  "short_name": "DTR Tracker",
+  "description": "On-the-Job Training Daily Time Record Tracker",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b0b14",
+  "theme_color": "#7c3aed",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
