@@ -1,5 +1,39 @@
 import { store } from '../store.js';
-import { toast, confirmDialog, ICONS } from '../utils.js';
+import { toast, confirmDialog, openModal, closeModal, fmtDate, ICONS } from '../utils.js';
+
+function renderImportPreview(summary) {
+  const diff = summary.diff || {};
+  return `
+    <div class="modal-header">
+      <h3>Import Preview</h3>
+      <button class="btn-icon modal-close-btn">${ICONS.x}</button>
+    </div>
+    <div class="modal-body">
+      <div class="progress-details">
+        <div class="detail-row"><span class="detail-label">Current Entries</span><span class="detail-value">${summary.current.entries}</span></div>
+        <div class="detail-row"><span class="detail-label">Incoming Entries</span><span class="detail-value">${summary.incoming.entries}</span></div>
+        <div class="detail-row"><span class="detail-label">Current Holidays</span><span class="detail-value">${summary.current.holidays}</span></div>
+        <div class="detail-row"><span class="detail-label">Incoming Holidays</span><span class="detail-value">${summary.incoming.holidays}</span></div>
+        <div class="detail-row"><span class="detail-label">Current Profile</span><span class="detail-value">${summary.current.profileName || '--'}</span></div>
+        <div class="detail-row"><span class="detail-label">Incoming Profile</span><span class="detail-value">${summary.incoming.profileName || '--'}</span></div>
+        <div class="detail-row"><span class="detail-label">Current Theme</span><span class="detail-value">${summary.current.theme}</span></div>
+        <div class="detail-row"><span class="detail-label">Incoming Theme</span><span class="detail-value">${summary.incoming.theme}</span></div>
+        <div class="detail-row"><span class="detail-label">Date Range</span><span class="detail-value">${summary.incoming.startDate ? `${fmtDate(summary.incoming.startDate)} to ${fmtDate(summary.incoming.endDate)}` : 'No entries'}</span></div>
+      </div>
+      <div class="progress-details" style="margin-top:16px">
+        <div class="detail-row"><span class="detail-label">Entries Added / Changed / Removed</span><span class="detail-value">${diff.entriesAdded || 0} / ${diff.entriesChanged || 0} / ${diff.entriesRemoved || 0}</span></div>
+        <div class="detail-row"><span class="detail-label">Holidays Added / Changed / Removed</span><span class="detail-value">${diff.holidaysAdded || 0} / ${diff.holidaysChanged || 0} / ${diff.holidaysRemoved || 0}</span></div>
+        <div class="detail-row"><span class="detail-label">Profile Fields Changed</span><span class="detail-value">${diff.changedProfileFields?.length ? diff.changedProfileFields.join(', ') : 'None'}</span></div>
+        <div class="detail-row"><span class="detail-label">Settings Changed</span><span class="detail-value">${diff.changedSettingFields?.length ? diff.changedSettingFields.join(', ') : 'None'}</span></div>
+      </div>
+      <p class="text-muted" style="margin-top:16px">Importing will replace your current entries, holidays, and settings.</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost modal-cancel-btn">Cancel</button>
+      <button class="btn btn-primary" id="confirm-import">Replace Current Data</button>
+    </div>
+  `;
+}
 
 export function render() {
   const p = store.state.profile;
@@ -91,7 +125,7 @@ export function render() {
     <!-- Data Management -->
     <div class="card">
       <div class="card-header"><h3>Data Management</h3></div>
-      <p class="text-muted mb-4" style="font-size:0.9rem">All data is stored locally in your browser.</p>
+      <p class="text-muted mb-4" style="font-size:0.9rem">Your data is stored in your account and can also be exported as JSON.</p>
       <div class="flex gap-4" style="flex-wrap:wrap">
         <button class="btn btn-secondary" id="btn-export-data">${ICONS.download} Export JSON</button>
         <label class="btn btn-secondary" style="cursor:pointer">${ICONS.upload} Import Data<input type="file" id="btn-import-data" accept=".json" style="display:none"></label>
@@ -102,35 +136,75 @@ export function render() {
 }
 
 export function mount() {
-  document.getElementById('btn-save-profile')?.addEventListener('click', () => {
-    store.updateProfile({ name: document.getElementById('set-name').value.trim(), position: document.getElementById('set-position').value.trim(), department: document.getElementById('set-dept').value.trim(), school: document.getElementById('set-school').value.trim(), supervisor: document.getElementById('set-supervisor').value.trim(), startDate: document.getElementById('set-start').value });
-    toast('Profile saved!', 'success');
+  document.getElementById('btn-save-profile')?.addEventListener('click', async () => {
+    try {
+      await store.updateProfile({ name: document.getElementById('set-name').value.trim(), position: document.getElementById('set-position').value.trim(), department: document.getElementById('set-dept').value.trim(), school: document.getElementById('set-school').value.trim(), supervisor: document.getElementById('set-supervisor').value.trim(), startDate: document.getElementById('set-start').value });
+      toast('Profile saved!', 'success');
+    } catch (err) {
+      toast(err.message || 'Failed to save profile', 'error');
+    }
   });
-  document.getElementById('btn-save-settings')?.addEventListener('click', () => {
-    store.updateSettings({ requiredHours: parseInt(document.getElementById('set-hours').value) || 486, weeklyTarget: parseInt(document.getElementById('set-weekly').value) || 40, breakDuration: parseInt(document.getElementById('set-break').value) || 60, expectedTimeIn: document.getElementById('set-timein').value || '08:00', expectedTimeOut: document.getElementById('set-timeout').value || '17:00' });
-    toast('Settings saved!', 'success');
+  document.getElementById('btn-save-settings')?.addEventListener('click', async () => {
+    try {
+      await store.updateSettings({ requiredHours: parseInt(document.getElementById('set-hours').value) || 486, weeklyTarget: parseInt(document.getElementById('set-weekly').value) || 40, breakDuration: parseInt(document.getElementById('set-break').value) || 60, expectedTimeIn: document.getElementById('set-timein').value || '08:00', expectedTimeOut: document.getElementById('set-timeout').value || '17:00' });
+      toast('Settings saved!', 'success');
+    } catch (err) {
+      toast(err.message || 'Failed to save settings', 'error');
+    }
   });
   // Time Format
-  document.getElementById('format-12h')?.addEventListener('click', () => { store.updateSettings({ timeFormat: '12h' }); window.dispatchEvent(new Event('hashchange')); });
-  document.getElementById('format-24h')?.addEventListener('click', () => { store.updateSettings({ timeFormat: '24h' }); window.dispatchEvent(new Event('hashchange')); });
+  document.getElementById('format-12h')?.addEventListener('click', async () => {
+    try {
+      await store.updateSettings({ timeFormat: '12h' });
+    } catch (err) {
+      toast(err.message || 'Failed to update time format', 'error');
+    }
+  });
+  document.getElementById('format-24h')?.addEventListener('click', async () => {
+    try {
+      await store.updateSettings({ timeFormat: '24h' });
+    } catch (err) {
+      toast(err.message || 'Failed to update time format', 'error');
+    }
+  });
   // Theme
-  document.getElementById('theme-dark')?.addEventListener('click', () => { store.setTheme('dark'); window.dispatchEvent(new Event('hashchange')); });
-  document.getElementById('theme-light')?.addEventListener('click', () => { store.setTheme('light'); window.dispatchEvent(new Event('hashchange')); });
+  document.getElementById('theme-dark')?.addEventListener('click', async () => {
+    try {
+      await store.setTheme('dark');
+    } catch (err) {
+      toast(err.message || 'Failed to update theme', 'error');
+    }
+  });
+  document.getElementById('theme-light')?.addEventListener('click', async () => {
+    try {
+      await store.setTheme('light');
+    } catch (err) {
+      toast(err.message || 'Failed to update theme', 'error');
+    }
+  });
   // Notifications
   document.getElementById('set-notif')?.addEventListener('change', e => {
     const els = [document.getElementById('set-notif-in'), document.getElementById('set-notif-out')];
     els.forEach(el => { if (el) el.disabled = !e.target.checked; });
   });
-  document.getElementById('btn-save-notif')?.addEventListener('click', () => {
-    const enabled = document.getElementById('set-notif').checked;
-    if (enabled && 'Notification' in window && Notification.permission !== 'granted') Notification.requestPermission();
-    store.updateSettings({ notificationsEnabled: enabled, clockInReminder: document.getElementById('set-notif-in').value, clockOutReminder: document.getElementById('set-notif-out').value });
-    toast('Notification settings saved!', 'success');
+  document.getElementById('btn-save-notif')?.addEventListener('click', async () => {
+    try {
+      const enabled = document.getElementById('set-notif').checked;
+      if (enabled && 'Notification' in window && Notification.permission !== 'granted') Notification.requestPermission();
+      await store.updateSettings({ notificationsEnabled: enabled, clockInReminder: document.getElementById('set-notif-in').value, clockOutReminder: document.getElementById('set-notif-out').value });
+      toast('Notification settings saved!', 'success');
+    } catch (err) {
+      toast(err.message || 'Failed to save notification settings', 'error');
+    }
   });
   // Auto-backup
-  document.getElementById('btn-save-backup')?.addEventListener('click', () => {
-    store.updateSettings({ autoBackup: document.getElementById('set-backup').value });
-    toast('Backup settings saved!', 'success');
+  document.getElementById('btn-save-backup')?.addEventListener('click', async () => {
+    try {
+      await store.updateSettings({ autoBackup: document.getElementById('set-backup').value });
+      toast('Backup settings saved!', 'success');
+    } catch (err) {
+      toast(err.message || 'Failed to save backup settings', 'error');
+    }
   });
   // Data management
   document.getElementById('btn-export-data')?.addEventListener('click', () => {
@@ -142,18 +216,38 @@ export function mount() {
     const file = e.target.files[0]; if (!file) return;
     const reader = new FileReader();
     reader.onload = async () => {
-      toast('Importing data...', 'info');
-      const success = await store.importData(reader.result);
-      if (success) {
-        toast('Data imported successfully!', 'success');
-        window.dispatchEvent(new Event('hashchange'));
-      } else {
-        toast('Invalid file or import failed', 'error');
+      try {
+        const raw = reader.result;
+        const summary = await store.previewImport(raw);
+        openModal(renderImportPreview(summary));
+        document.querySelector('.modal-close-btn').onclick = closeModal;
+        document.querySelector('.modal-cancel-btn').onclick = closeModal;
+        document.getElementById('confirm-import').onclick = async () => {
+          toast('Importing data...', 'info');
+          const success = await store.importData(raw);
+          if (success) {
+            closeModal();
+            toast('Data imported successfully!', 'success');
+          } else {
+            toast('Import failed during apply', 'error');
+          }
+        };
+      } catch (err) {
+        toast(err.message || 'Invalid file or import failed', 'error');
       }
     };
+    reader.onerror = () => toast('Failed to read file', 'error');
     reader.readAsText(file);
+    e.target.value = '';
   });
   document.getElementById('btn-clear-data')?.addEventListener('click', async () => {
-    if (await confirmDialog('Permanently delete ALL data?')) { store.clearAllData(); toast('Cleared', 'info'); window.dispatchEvent(new Event('hashchange')); }
+    if (await confirmDialog('Permanently delete ALL data?')) {
+      try {
+        await store.clearAllData();
+        toast('Cleared', 'info');
+      } catch (err) {
+        toast(err.message || 'Failed to clear data', 'error');
+      }
+    }
   });
 }

@@ -4,6 +4,13 @@ node_modules/
 # Logs
 *.log
 
+# Build and runtime output
+dist/
+.runtime/
+.playwright-cli/
+mongo/data/
+mongo/log/
+
 # OS files
 Thumbs.db
 .DS_Store

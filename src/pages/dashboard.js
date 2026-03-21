@@ -3,6 +3,8 @@ import { fmtHours, fmtMinutes, fmtDate, getDayName, getCurrentDate, getCurrentTi
   calculateEntryHours, calculateOvertime, calculateLate, calculateUndertime,
   toast, ICONS, fmtTimeStr } from '../utils.js';
 
+let clockIntervalId = null;
+
 export function render() {
   const progress = store.getProgress();
   const totalHrs = store.getTotalHours();
@@ -132,28 +134,39 @@ export function mount() {
   const s = store.state.settings;
   const btn = document.getElementById('btn-clock');
   if (btn) {
-    btn.addEventListener('click', () => {
-      const today = getCurrentDate(), now = getCurrentTime();
-      const { phase, entry } = store.getClockPhase(today);
-      if (phase === 0) {
-        store.addEntry({ date: today, amTimeIn: now, amTimeOut: '', pmTimeIn: '', pmTimeOut: '', hoursRendered: 0, overtimeHours: 0, lateMinutes: calculateLate(now, s.expectedTimeIn), undertimeMinutes: 0, remarks: '', activities: '' });
-        toast('AM Clocked In!', 'success');
-      } else if (phase === 1) {
-        const hrs = calculateEntryHours({ ...entry, amTimeOut: now });
-        store.updateEntry(entry.id, { amTimeOut: now, hoursRendered: hrs, overtimeHours: calculateOvertime(hrs) });
-        toast('AM Clocked Out!', 'success');
-      } else if (phase === 2) {
-        store.updateEntry(entry.id, { pmTimeIn: now });
-        toast('PM Clocked In!', 'success');
-      } else if (phase === 3) {
-        const hrs = calculateEntryHours({ ...entry, pmTimeOut: now });
-        store.updateEntry(entry.id, { pmTimeOut: now, hoursRendered: hrs, overtimeHours: calculateOvertime(hrs), undertimeMinutes: calculateUndertime(now, s.expectedTimeOut) });
-        toast('PM Clocked Out! ' + fmtHours(hrs) + ' recorded.', 'success');
+    btn.addEventListener('click', async () => {
+      try {
+        const today = getCurrentDate(), now = getCurrentTime();
+        const { phase, entry } = store.getClockPhase(today);
+        if (phase === 0) {
+          await store.addEntry({ date: today, amTimeIn: now, amTimeOut: '', pmTimeIn: '', pmTimeOut: '', hoursRendered: 0, overtimeHours: 0, lateMinutes: calculateLate(now, s.expectedTimeIn), undertimeMinutes: 0, remarks: '', activities: '' });
+          toast('AM Clocked In!', 'success');
+        } else if (phase === 1) {
+          const hrs = calculateEntryHours({ ...entry, amTimeOut: now });
+          await store.updateEntry(entry.id, { amTimeOut: now, hoursRendered: hrs, overtimeHours: calculateOvertime(hrs) });
+          toast('AM Clocked Out!', 'success');
+        } else if (phase === 2) {
+          await store.updateEntry(entry.id, { pmTimeIn: now });
+          toast('PM Clocked In!', 'success');
+        } else if (phase === 3) {
+          const hrs = calculateEntryHours({ ...entry, pmTimeOut: now });
+          await store.updateEntry(entry.id, { pmTimeOut: now, hoursRendered: hrs, overtimeHours: calculateOvertime(hrs), undertimeMinutes: calculateUndertime(now, s.expectedTimeOut) });
+          toast('PM Clocked Out! ' + fmtHours(hrs) + ' recorded.', 'success');
+        }
+      } catch (err) {
+        toast(err.message || 'Failed to update clock entry', 'error');
       }
-      window.dispatchEvent(new Event('hashchange'));
     });
   }
   // Live clock
   const clockEl = document.querySelector('.clock-time');
-  if (clockEl) setInterval(() => { clockEl.textContent = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }); }, 30000);
+  if (clockIntervalId) {
+    clearInterval(clockIntervalId);
+    clockIntervalId = null;
+  }
+  if (clockEl) {
+    clockIntervalId = setInterval(() => {
+      clockEl.textContent = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    }, 30000);
+  }
 }

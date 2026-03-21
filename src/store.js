@@ -23,11 +23,35 @@ const DEFAULT_STATE = {
 
 const API_BASE = '/api';
 
+function toLocalDateString(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 class Store {
   constructor() {
     this.state = structuredClone(DEFAULT_STATE);
     this.listeners = [];
     this.undoStack = [];
+    this.isHydrating = false;
+    this.dataVersion = 0;
+    this.resourceVersions = {
+      entries: 0,
+      holidays: 0,
+      config: 0,
+      auth: 0,
+    };
+    this.initSequence = 0;
+    this.sortedEntriesCache = [];
+    this.sortedEntriesCacheVersion = -1;
+    this.monthEntriesCache = new Map();
+    this.summaryStatsCache = null;
+    this.summaryStatsCacheVersion = -1;
+    this.pendingLocalSyncSkips = 0;
+    this.syncInFlight = null;
+    this.syncQueued = new Set();
     this.userId = localStorage.getItem('dtr_user_id') || null;
     this.username = localStorage.getItem('dtr_username') || null;
     if (this.userId) {
@@ -38,32 +62,197 @@ class Store {
 
   async init() {
     if (!this.userId) return;
+    const sequence = ++this.initSequence;
+    const dataVersionAtStart = this.dataVersion;
+    let applied = false;
+    this.isHydrating = true;
+    this._notify({ resources: ['hydration'], forceRender: true });
     try {
       const headers = { 'X-User-Id': this.userId };
       const [entries, holidays, config] = await Promise.all([
-        fetch(`${API_BASE}/entries`, { headers }).then(r => r.json()),
-        fetch(`${API_BASE}/holidays`, { headers }).then(r => r.json()),
-        fetch(`${API_BASE}/config`, { headers }).then(r => r.json())
+        this._request('/entries', { headers }, { logoutOn401: true }),
+        this._request('/holidays', { headers }, { logoutOn401: true }),
+        this._request('/config', { headers }, { logoutOn401: true })
       ]);
 
-      this.state.entries = entries;
-      this.state.holidays = holidays;
-      if (config) {
-        this.state.profile = { ...DEFAULT_STATE.profile, ...config.profile };
-        this.state.settings = { ...DEFAULT_STATE.settings, ...config.settings };
-        this.state.theme = config.theme || 'dark';
+      if (sequence !== this.initSequence || dataVersionAtStart !== this.dataVersion || !this.userId) {
+        return;
       }
-      
-      // Apply theme
-      document.body.className = this.state.theme === 'light' ? 'light-theme' : '';
-      this._notify();
+
+      this._applyServerState(entries, holidays, config);
+      applied = true;
     } catch (e) {
       console.error('[Store] Failed to load data from server:', e);
+    } finally {
+      if (sequence === this.initSequence) {
+        this.isHydrating = false;
+      }
+      if (!applied) {
+        this._notify({ resources: ['hydration'], forceRender: true });
+      }
     }
   }
 
-  _notify() {
-    this.listeners.forEach(fn => fn(this.state));
+  _notify(changes = {}) {
+    const normalizedChanges = {
+      resources: [...new Set(changes.resources || [])],
+      forceRender: changes.forceRender === true,
+    };
+    this.listeners.forEach(fn => fn(this.state, normalizedChanges));
+  }
+
+  _invalidateEntryCaches() {
+    this.sortedEntriesCacheVersion = -1;
+    this.monthEntriesCache.clear();
+    this.summaryStatsCache = null;
+    this.summaryStatsCacheVersion = -1;
+  }
+
+  _markResourcesChanged(resources = []) {
+    const uniqueResources = [...new Set(resources)];
+    if (!uniqueResources.length) return uniqueResources;
+    this.dataVersion += 1;
+    uniqueResources.forEach(resource => {
+      if (Object.hasOwn(this.resourceVersions, resource)) {
+        this.resourceVersions[resource] += 1;
+      }
+    });
+    if (uniqueResources.includes('entries')) {
+      this._invalidateEntryCaches();
+    }
+    return uniqueResources;
+  }
+
+  getResourceVersion(resource) {
+    return this.resourceVersions[resource] || 0;
+  }
+
+  _queueLocalSyncSkip() {
+    this.pendingLocalSyncSkips += 1;
+  }
+
+  _consumeLocalSyncSkip() {
+    if (this.pendingLocalSyncSkips > 0) {
+      this.pendingLocalSyncSkips -= 1;
+      return true;
+    }
+    return false;
+  }
+
+  _applyServerState(entries, holidays, config, resources = ['entries', 'holidays', 'config']) {
+    const changedResources = [];
+
+    if (resources.includes('entries')) {
+      this.state.entries = entries;
+      changedResources.push('entries');
+    }
+
+    if (resources.includes('holidays')) {
+      this.state.holidays = holidays;
+      changedResources.push('holidays');
+    }
+
+    if (resources.includes('config') && config) {
+      this.state.profile = { ...DEFAULT_STATE.profile, ...config.profile };
+      this.state.settings = { ...DEFAULT_STATE.settings, ...config.settings };
+      const oldTheme = this.state.theme;
+      this.state.theme = config.theme || 'dark';
+      if (oldTheme !== this.state.theme) {
+        document.body.className = this.state.theme === 'light' ? 'light-theme' : '';
+      }
+      changedResources.push('config');
+    }
+
+    const markedResources = this._markResourcesChanged(changedResources);
+    this._notify({ resources: markedResources });
+  }
+
+  async _refreshFromServer() {
+    return this._refreshResources(['entries', 'holidays', 'config']);
+  }
+
+  async _refreshResources(resources = ['entries', 'holidays', 'config']) {
+    if (!this.userId) return;
+    const resourceSet = new Set(resources);
+    const headers = { 'X-User-Id': this.userId };
+    const requests = [];
+
+    if (resourceSet.has('entries')) {
+      requests.push(this._request('/entries', { headers }, { logoutOn401: true }).then(entries => ({ key: 'entries', value: entries })));
+    }
+    if (resourceSet.has('holidays')) {
+      requests.push(this._request('/holidays', { headers }, { logoutOn401: true }).then(holidays => ({ key: 'holidays', value: holidays })));
+    }
+    if (resourceSet.has('config')) {
+      requests.push(this._request('/config', { headers }, { logoutOn401: true }).then(config => ({ key: 'config', value: config })));
+    }
+
+    if (!requests.length) return;
+
+    const results = await Promise.all(requests);
+    if (!this.userId) return;
+
+    let entries = this.state.entries;
+    let holidays = this.state.holidays;
+    let config = {
+      profile: this.state.profile,
+      settings: this.state.settings,
+      theme: this.state.theme,
+    };
+
+    for (const result of results) {
+      if (result.key === 'entries') entries = result.value;
+      else if (result.key === 'holidays') holidays = result.value;
+      else if (result.key === 'config') config = result.value;
+    }
+
+    this._applyServerState(entries, holidays, config, [...resourceSet]);
+  }
+
+  _scheduleServerRefresh(resources = ['entries', 'holidays', 'config']) {
+    if (!this.userId) return;
+    const nextResources = new Set(resources);
+    if (this.syncInFlight) {
+      for (const resource of nextResources) this.syncQueued.add(resource);
+      return this.syncInFlight;
+    }
+
+    this.syncQueued = new Set();
+    this.syncInFlight = this._refreshResources(nextResources)
+      .catch(err => {
+        console.error('Real-time sync error:', err);
+      })
+      .finally(() => {
+        this.syncInFlight = null;
+        if (this.syncQueued.size) {
+          const queuedResources = [...this.syncQueued];
+          this.syncQueued.clear();
+          this._scheduleServerRefresh(queuedResources);
+        }
+      });
+
+    return this.syncInFlight;
+  }
+
+  async _request(path, options = {}, { logoutOn401 = false } = {}) {
+    const res = await fetch(`${API_BASE}${path}`, options);
+    const contentType = res.headers.get('content-type') || '';
+    const data = contentType.includes('application/json')
+      ? await res.json().catch(() => null)
+      : await res.text().catch(() => '');
+
+    if (res.status === 401 && logoutOn401) {
+      this.logout();
+    }
+
+    if (!res.ok) {
+      const error = new Error(data?.error || (typeof data === 'string' && data) || `Request failed (${res.status})`);
+      error.status = res.status;
+      error.data = data;
+      throw error;
+    }
+
+    return data;
   }
 
   startPolling() {
@@ -72,43 +261,13 @@ class Store {
     this.evtSource.onmessage = async (e) => {
       const data = JSON.parse(e.data);
       if (data.type === 'update') {
-        try {
-          // Re-fetch data only when the server tells us there's an update
-          const headers = { 'X-User-Id': this.userId };
-          const [newEntries, newHolidays, newConfig] = await Promise.all([
-            fetch(`${API_BASE}/entries`, { headers }).then(r => { if (r.status===401) this.logout(); return r.json(); }),
-            fetch(`${API_BASE}/holidays`, { headers }).then(r => r.json()),
-            fetch(`${API_BASE}/config`, { headers }).then(r => r.json())
-          ]);
-
-          const entriesChanged = JSON.stringify(this.state.entries) !== JSON.stringify(newEntries);
-          const holidaysChanged = JSON.stringify(this.state.holidays) !== JSON.stringify(newHolidays);
-          const configChanged = JSON.stringify(this.state.settings) !== JSON.stringify(newConfig.settings);
-          const profileChanged = JSON.stringify(this.state.profile) !== JSON.stringify(newConfig.profile);
-          const themeChanged = this.state.theme !== (newConfig.theme || 'dark');
-
-          if (entriesChanged || holidaysChanged || configChanged || profileChanged || themeChanged) {
-            this.state.entries = newEntries;
-            this.state.holidays = newHolidays;
-            if (newConfig) {
-              this.state.profile = { ...DEFAULT_STATE.profile, ...newConfig.profile };
-              this.state.settings = { ...DEFAULT_STATE.settings, ...newConfig.settings };
-              const oldTheme = this.state.theme;
-              this.state.theme = newConfig.theme || 'dark';
-              if (oldTheme !== this.state.theme) {
-                document.body.className = this.state.theme === 'light' ? 'light-theme' : '';
-              }
-            }
-            this._notify();
-
-            // Only trigger a frontend visual refresh if the user isn't actively typing in a popup modal
-            if (!document.querySelector('.modal-overlay')) {
-              window.dispatchEvent(new Event('hashchange'));
-            }
-          }
-        } catch (err) {
-          console.error('Real-time sync error:', err);
+        if (this._consumeLocalSyncSkip()) {
+          return;
         }
+        const resources = Array.isArray(data.resources) && data.resources.length
+          ? data.resources
+          : ['entries', 'holidays', 'config'];
+        this._scheduleServerRefresh(resources);
       }
     };
   }
@@ -121,22 +280,18 @@ class Store {
 
   // --- Auth ---
   async login(username, password) {
-    const res = await fetch(`${API_BASE}/auth/login`, {
+    const data = await this._request('/auth/login', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
     });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
     this._setAuth(data.userId, data.username);
   }
 
   async register(username, password) {
-    const res = await fetch(`${API_BASE}/auth/register`, {
+    const data = await this._request('/auth/register', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
     });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
     this._setAuth(data.userId, data.username);
   }
 
@@ -145,9 +300,9 @@ class Store {
     this.username = name;
     localStorage.setItem('dtr_user_id', id);
     localStorage.setItem('dtr_username', name);
+    this._markResourcesChanged(['auth']);
     this.init();
     this.startPolling();
-    this._notify();
     // Trigger navigation and ensure re-render
     window.location.hash = '#/';
     window.dispatchEvent(new Event('hashchange'));
@@ -160,7 +315,10 @@ class Store {
     localStorage.removeItem('dtr_username');
     if (this.evtSource) { this.evtSource.close(); this.evtSource = null; }
     this.state = structuredClone(DEFAULT_STATE);
-    this._notify();
+    document.body.className = '';
+    this.isHydrating = false;
+    this._markResourcesChanged(['entries', 'holidays', 'config', 'auth']);
+    this._notify({ resources: ['entries', 'holidays', 'config', 'auth'], forceRender: true });
     window.dispatchEvent(new Event('hashchange'));
   }
 
@@ -168,44 +326,88 @@ class Store {
   async addEntry(entry) {
     entry.id = crypto.randomUUID();
     entry.createdAt = new Date().toISOString();
-    
-    const res = await fetch(`${API_BASE}/entries`, {
+    this._queueLocalSyncSkip();
+    const newEntry = await this._request('/entries', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
       body: JSON.stringify(entry)
+    }, { logoutOn401: true }).catch(err => {
+      this._consumeLocalSyncSkip();
+      throw err;
     });
-    const newEntry = await res.json();
     
     this.state.entries.push(newEntry);
-    this._notify();
+    this._markResourcesChanged(['entries']);
+    this._notify({ resources: ['entries'] });
     return newEntry;
   }
 
   async updateEntry(id, updates) {
     const i = this.state.entries.findIndex(e => e.id === id);
     if (i === -1) return null;
-    this._pushUndo('update', structuredClone(this.state.entries[i]));
-    
-    const res = await fetch(`${API_BASE}/entries/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
-      body: JSON.stringify(updates)
-    });
-    const updatedEntry = await res.json();
+    const previousEntry = structuredClone(this.state.entries[i]);
+    this._pushUndo('update', previousEntry);
+    this._queueLocalSyncSkip();
+    let updatedEntry;
+    try {
+      updatedEntry = await this._request(`/entries/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+        body: JSON.stringify({ ...updates, previousState: previousEntry })
+      }, { logoutOn401: true });
+    } catch (err) {
+      if (err.status === 409 && err.data?.current) {
+        this._consumeLocalSyncSkip();
+        this.state.entries[i] = err.data.current;
+        this._markResourcesChanged(['entries']);
+        this._notify({ resources: ['entries'] });
+        const conflictError = new Error('Entry changed elsewhere. Latest data was loaded.');
+        conflictError.current = err.data.current;
+        conflictError.conflicts = err.data.conflicts || [];
+        conflictError.clientChangedFields = err.data.clientChangedFields || [];
+        conflictError.serverChangedFields = err.data.serverChangedFields || [];
+        throw conflictError;
+      }
+      this._consumeLocalSyncSkip();
+      throw err;
+    }
     
     this.state.entries[i] = updatedEntry;
-    this._notify();
+    this._markResourcesChanged(['entries']);
+    this._notify({ resources: ['entries'] });
     return updatedEntry;
   }
 
-  async deleteEntry(id) {
+  async deleteEntry(id, { force = false } = {}) {
     const entry = this.state.entries.find(e => e.id === id);
     if (entry) this._pushUndo('delete', structuredClone(entry));
-    
-    await fetch(`${API_BASE}/entries/${id}`, { method: 'DELETE', headers: { 'X-User-Id': this.userId } });
+    this._queueLocalSyncSkip();
+    try {
+      await this._request(`/entries/${id}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+        body: JSON.stringify({ previousState: entry || null, force })
+      }, { logoutOn401: true });
+    } catch (err) {
+      if (err.status === 409 && err.data?.current) {
+        this._consumeLocalSyncSkip();
+        const index = this.state.entries.findIndex(e => e.id === id);
+        if (index === -1) this.state.entries.push(err.data.current);
+        else this.state.entries[index] = err.data.current;
+        this._markResourcesChanged(['entries']);
+        this._notify({ resources: ['entries'] });
+        const conflictError = new Error('Entry changed elsewhere. Latest data was loaded.');
+        conflictError.current = err.data.current;
+        conflictError.conflicts = err.data.conflicts || [];
+        throw conflictError;
+      }
+      this._consumeLocalSyncSkip();
+      throw err;
+    }
     
     this.state.entries = this.state.entries.filter(e => e.id !== id);
-    this._notify();
+    this._markResourcesChanged(['entries']);
+    this._notify({ resources: ['entries'] });
   }
 
 
@@ -227,26 +429,67 @@ class Store {
   }
 
   getEntriesByMonth(year, month) {
-    return this.state.entries
+    const key = `${year}-${month}`;
+    const entriesVersion = this.getResourceVersion('entries');
+    const cached = this.monthEntriesCache.get(key);
+    if (cached?.version === entriesVersion) {
+      return cached.value;
+    }
+
+    const value = this.state.entries
       .filter(e => { const d = new Date(e.date); return d.getFullYear() === year && d.getMonth() === month; })
       .sort((a, b) => a.date.localeCompare(b.date));
+    this.monthEntriesCache.set(key, { version: entriesVersion, value });
+    return value;
   }
 
-  getAllEntries() { return [...this.state.entries].sort((a, b) => b.date.localeCompare(a.date)); }
+  getAllEntries() {
+    const entriesVersion = this.getResourceVersion('entries');
+    if (this.sortedEntriesCacheVersion !== entriesVersion) {
+      this.sortedEntriesCache = [...this.state.entries].sort((a, b) => b.date.localeCompare(a.date));
+      this.sortedEntriesCacheVersion = entriesVersion;
+    }
+    return this.sortedEntriesCache;
+  }
+
+  async fetchEntries({ dateFrom, dateTo, page, limit } = {}) {
+    const params = new URLSearchParams();
+    if (dateFrom) params.set('date_from', dateFrom);
+    if (dateTo) params.set('date_to', dateTo);
+    if (page != null) params.set('page', String(page));
+    if (limit != null) params.set('limit', String(limit));
+    const query = params.toString();
+    return this._request(`/entries${query ? `?${query}` : ''}`, {
+      headers: { 'X-User-Id': this.userId }
+    }, { logoutOn401: true });
+  }
 
   // --- Profile & Settings ---
   async updateProfile(p) { 
+    const previousProfile = { ...this.state.profile };
     this.state.profile = { ...this.state.profile, ...p }; 
-    await this._saveConfig();
+    try {
+      await this._saveConfig();
+    } catch (err) {
+      this.state.profile = previousProfile;
+      throw err;
+    }
   }
   
   async updateSettings(s) { 
+    const previousSettings = { ...this.state.settings };
     this.state.settings = { ...this.state.settings, ...s }; 
-    await this._saveConfig();
+    try {
+      await this._saveConfig();
+    } catch (err) {
+      this.state.settings = previousSettings;
+      throw err;
+    }
   }
 
   async _saveConfig() {
-    await fetch(`${API_BASE}/config`, {
+    this._queueLocalSyncSkip();
+    const savedConfig = await this._request('/config', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
       body: JSON.stringify({ 
@@ -254,28 +497,79 @@ class Store {
         settings: this.state.settings, 
         theme: this.state.theme 
       })
+    }, { logoutOn401: true }).catch(err => {
+      this._consumeLocalSyncSkip();
+      throw err;
     });
-    this._notify();
+    this.state.profile = { ...DEFAULT_STATE.profile, ...savedConfig.profile };
+    this.state.settings = { ...DEFAULT_STATE.settings, ...savedConfig.settings };
+    this.state.theme = savedConfig.theme || 'dark';
+    document.body.className = this.state.theme === 'light' ? 'light-theme' : '';
+    this._markResourcesChanged(['config']);
+    this._notify({ resources: ['config'] });
   }
 
   // --- Holidays ---
   async addHoliday(h) {
     if (!this.state.holidays.find(x => x.date === h.date)) {
-      const res = await fetch(`${API_BASE}/holidays`, {
+      this._queueLocalSyncSkip();
+      const newHol = await this._request('/holidays', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
         body: JSON.stringify(h)
+      }, { logoutOn401: true }).catch(err => {
+        this._consumeLocalSyncSkip();
+        throw err;
       });
-      const newHol = await res.json();
       this.state.holidays.push(newHol);
-      this._notify();
+      this._markResourcesChanged(['holidays']);
+      this._notify({ resources: ['holidays'] });
     }
   }
 
   async removeHoliday(date) { 
-    await fetch(`${API_BASE}/holidays/${date}`, { method: 'DELETE', headers: { 'X-User-Id': this.userId } });
+    this._queueLocalSyncSkip();
+    await this._request(`/holidays/${date}`, { method: 'DELETE', headers: { 'X-User-Id': this.userId } }, { logoutOn401: true }).catch(err => {
+      this._consumeLocalSyncSkip();
+      throw err;
+    });
     this.state.holidays = this.state.holidays.filter(h => h.date !== date); 
-    this._notify();
+    this._markResourcesChanged(['holidays']);
+    this._notify({ resources: ['holidays'] });
+  }
+
+  async restoreHoliday(snapshot) {
+    if (!snapshot?.date) throw new Error('Missing holiday snapshot');
+    this._queueLocalSyncSkip();
+    const restored = await this._request(`/holidays/${snapshot.date}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+      body: JSON.stringify(snapshot)
+    }, { logoutOn401: true }).catch(err => {
+      this._consumeLocalSyncSkip();
+      throw err;
+    });
+
+    const index = this.state.holidays.findIndex(holiday => holiday.date === restored.date);
+    if (index === -1) this.state.holidays.push(restored);
+    else this.state.holidays[index] = restored;
+    this._markResourcesChanged(['holidays']);
+    this._notify({ resources: ['holidays'] });
+    return restored;
+  }
+
+  async restoreConfig(snapshot) {
+    if (!snapshot) throw new Error('Missing config snapshot');
+    this._queueLocalSyncSkip();
+    await this._request('/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+      body: JSON.stringify(snapshot)
+    }, { logoutOn401: true }).catch(err => {
+      this._consumeLocalSyncSkip();
+      throw err;
+    });
+    await this.init();
   }
 
   getHolidaysInMonth(y, m) {
@@ -285,9 +579,16 @@ class Store {
 
   // --- Theme ---
   async setTheme(t) { 
+    const previousTheme = this.state.theme;
     this.state.theme = t; 
     document.body.className = t === 'light' ? 'light-theme' : ''; 
-    await this._saveConfig();
+    try {
+      await this._saveConfig();
+    } catch (err) {
+      this.state.theme = previousTheme;
+      document.body.className = previousTheme === 'light' ? 'light-theme' : '';
+      throw err;
+    }
   }
 
 
@@ -310,14 +611,45 @@ class Store {
   canUndo() { return this.undoStack.length > 0; }
 
   // --- Computed Stats ---
-  getTotalHours() { return this.state.entries.reduce((s, e) => s + (parseFloat(e.hoursRendered) || 0), 0); }
-  getTotalOvertime() { return this.state.entries.reduce((s, e) => s + (parseFloat(e.overtimeHours) || 0), 0); }
-  getTotalLateMinutes() { return this.state.entries.reduce((s, e) => s + (parseInt(e.lateMinutes) || 0), 0); }
-  getTotalUndertimeMinutes() { return this.state.entries.reduce((s, e) => s + (parseInt(e.undertimeMinutes) || 0), 0); }
+  _getSummaryStats() {
+    const entriesVersion = this.getResourceVersion('entries');
+    if (this.summaryStatsCacheVersion === entriesVersion && this.summaryStatsCache) {
+      return this.summaryStatsCache;
+    }
+
+    const attendedDates = new Set();
+    const stats = {
+      totalHours: 0,
+      totalOvertime: 0,
+      totalLateMinutes: 0,
+      totalUndertimeMinutes: 0,
+      daysAttended: 0,
+    };
+
+    for (const entry of this.state.entries) {
+      stats.totalHours += parseFloat(entry.hoursRendered) || 0;
+      stats.totalOvertime += parseFloat(entry.overtimeHours) || 0;
+      stats.totalLateMinutes += parseInt(entry.lateMinutes) || 0;
+      stats.totalUndertimeMinutes += parseInt(entry.undertimeMinutes) || 0;
+      if (entry.amTimeOut || entry.pmTimeOut) {
+        attendedDates.add(entry.date);
+      }
+    }
+
+    stats.daysAttended = attendedDates.size;
+    this.summaryStatsCache = stats;
+    this.summaryStatsCacheVersion = entriesVersion;
+    return stats;
+  }
+
+  getTotalHours() { return this._getSummaryStats().totalHours; }
+  getTotalOvertime() { return this._getSummaryStats().totalOvertime; }
+  getTotalLateMinutes() { return this._getSummaryStats().totalLateMinutes; }
+  getTotalUndertimeMinutes() { return this._getSummaryStats().totalUndertimeMinutes; }
   getRequiredHours() { return this.state.settings.requiredHours; }
   getRemainingHours() { return Math.max(0, this.getRequiredHours() - this.getTotalHours()); }
   getProgress() { const r = this.getRequiredHours(); return r === 0 ? 0 : Math.min(100, (this.getTotalHours() / r) * 100); }
-  getDaysAttended() { return new Set(this.state.entries.filter(e => e.amTimeOut || e.pmTimeOut).map(e => e.date)).size; }
+  getDaysAttended() { return this._getSummaryStats().daysAttended; }
 
   getAttendanceSummary(year, month) {
     const entries = year != null ? this.getEntriesByMonth(year, month) : this.state.entries;
@@ -351,7 +683,7 @@ class Store {
       const day = estDate.getDay();
       if (day !== 0 && day !== 6) count++;
     }
-    return { avgPerDay, daysNeeded, estimatedDate: estDate.toISOString().split('T')[0] };
+    return { avgPerDay, daysNeeded, estimatedDate: toLocalDateString(estDate) };
   }
 
   getCurrentWeekHours() {
@@ -359,10 +691,10 @@ class Store {
     const dayOfWeek = now.getDay();
     const monday = new Date(now);
     monday.setDate(now.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
-    const mondayStr = monday.toISOString().split('T')[0];
+    const mondayStr = toLocalDateString(monday);
     const sunday = new Date(monday);
     sunday.setDate(monday.getDate() + 6);
-    const sundayStr = sunday.toISOString().split('T')[0];
+    const sundayStr = toLocalDateString(sunday);
     return this.state.entries
       .filter(e => e.date >= mondayStr && e.date <= sundayStr)
       .reduce((s, e) => s + (parseFloat(e.hoursRendered) || 0), 0);
@@ -370,16 +702,27 @@ class Store {
 
   // --- Data Management ---
   exportData() { return JSON.stringify(this.state, null, 2); }
+  async previewImport(json) {
+    const data = JSON.parse(json);
+    return this._request('/import/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+      body: JSON.stringify(data)
+    }, { logoutOn401: true });
+  }
+
   async importData(json) {
     try {
       const data = JSON.parse(json);
-      const res = await fetch(`${API_BASE}/import`, {
+      this._queueLocalSyncSkip();
+      await this._request('/import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
         body: JSON.stringify(data)
+      }, { logoutOn401: true }).catch(err => {
+        this._consumeLocalSyncSkip();
+        throw err;
       });
-      const result = await res.json();
-      if (result.error) throw new Error(result.error);
       
       // Refresh local state
       await this.init();
@@ -390,17 +733,72 @@ class Store {
     }
   }
 
+  async restoreEntry(snapshot) {
+    if (!snapshot?.id) throw new Error('Missing entry snapshot');
+
+    const existingIndex = this.state.entries.findIndex(entry => entry.id === snapshot.id);
+    const method = existingIndex === -1 ? 'POST' : 'PUT';
+    const path = existingIndex === -1 ? '/entries' : `/entries/${snapshot.id}`;
+    const body = existingIndex === -1
+      ? snapshot
+      : { ...snapshot, previousState: structuredClone(this.state.entries[existingIndex]) };
+
+    this._queueLocalSyncSkip();
+    const restored = await this._request(path, {
+      method,
+      headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+      body: JSON.stringify(body)
+    }, { logoutOn401: true }).catch(err => {
+      this._consumeLocalSyncSkip();
+      throw err;
+    });
+
+    if (existingIndex === -1) {
+      this.state.entries.push(restored);
+    } else {
+      this.state.entries[existingIndex] = restored;
+    }
+    this._markResourcesChanged(['entries']);
+    this._notify({ resources: ['entries'] });
+    return restored;
+  }
+
+  async restoreStateSnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') throw new Error('Missing state snapshot');
+    this._queueLocalSyncSkip();
+    await this._request('/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+      body: JSON.stringify(snapshot)
+    }, { logoutOn401: true }).catch(err => {
+      this._consumeLocalSyncSkip();
+      throw err;
+    });
+    await this.init();
+  }
+
+  async forceDeleteEntry(id) {
+    return this.deleteEntry(id, { force: true });
+  }
+
   async clearAllData() {
     try {
-      await fetch(`${API_BASE}/import`, {
+      this._queueLocalSyncSkip();
+      await this._request('/import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
         body: JSON.stringify(DEFAULT_STATE)
+      }, { logoutOn401: true }).catch(err => {
+        this._consumeLocalSyncSkip();
+        throw err;
       });
       this.state = structuredClone(DEFAULT_STATE);
-      this._notify();
+      document.body.className = '';
+      this._markResourcesChanged(['entries', 'holidays', 'config']);
+      this._notify({ resources: ['entries', 'holidays', 'config'] });
     } catch (err) {
       console.error('Clear data failed:', err);
+      throw err;
     }
   }
 }

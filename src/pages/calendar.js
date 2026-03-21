@@ -1,6 +1,6 @@
 import { store } from '../store.js';
 import { fmtHours, getDayName, getDaysInMonth, MONTHS, ICONS,
-  openModal, closeModal, toast, getCurrentDate, fmtDate, fmtTimeStr } from '../utils.js';
+  openModal, closeModal, confirmDialog, toast, getCurrentDate, fmtDate, fmtTimeStr, requestRender } from '../utils.js';
 
 let selYear = new Date().getFullYear();
 let selMonth = new Date().getMonth();
@@ -10,6 +10,7 @@ function getDayStatus(dateStr) {
   const holiday = store.isHoliday(dateStr);
   const dayName = getDayName(dateStr);
   const isWeekend = dayName === 'Sat' || dayName === 'Sun';
+  const startDate = store.state.profile.startDate;
 
   if (holiday) return { cls: `cal-${holiday.type === 'holiday' ? 'holiday' : 'leave'}`, label: holiday.name, entry, holiday };
   if (entry && (entry.amTimeOut || entry.pmTimeOut)) {
@@ -20,6 +21,7 @@ function getDayStatus(dateStr) {
   if (isWeekend) return { cls: 'cal-weekend', label: '', entry: null, holiday: null };
   // Weekday, no entry — check if in the past
   const today = getCurrentDate();
+  if (startDate && dateStr < startDate) return { cls: '', label: '', entry: null, holiday: null };
   if (dateStr < today) return { cls: 'cal-absent', label: '', entry: null, holiday: null };
   return { cls: '', label: '', entry: null, holiday: null };
 }
@@ -114,15 +116,15 @@ export function render() {
 export function mount() {
   document.getElementById('cal-prev')?.addEventListener('click', () => {
     selMonth--; if (selMonth < 0) { selMonth = 11; selYear--; }
-    window.dispatchEvent(new Event('hashchange'));
+    requestRender();
   });
   document.getElementById('cal-next')?.addEventListener('click', () => {
     selMonth++; if (selMonth > 11) { selMonth = 0; selYear++; }
-    window.dispatchEvent(new Event('hashchange'));
+    requestRender();
   });
   document.getElementById('cal-today-btn')?.addEventListener('click', () => {
     selYear = new Date().getFullYear(); selMonth = new Date().getMonth();
-    window.dispatchEvent(new Event('hashchange'));
+    requestRender();
   });
 
   // Click on day cell to view entry
@@ -167,15 +169,18 @@ export function mount() {
     `);
     document.querySelector('.modal-close-btn').onclick = closeModal;
     document.querySelector('.modal-cancel-btn').onclick = closeModal;
-    document.getElementById('hol-save').onclick = () => {
+    document.getElementById('hol-save').onclick = async () => {
       const date = document.getElementById('hol-date').value;
       const name = document.getElementById('hol-name').value.trim();
       const type = document.getElementById('hol-type').value;
       if (!date || !name) { toast('Date and name required', 'error'); return; }
-      store.addHoliday({ date, name, type });
-      toast('Added!', 'success');
-      closeModal();
-      window.dispatchEvent(new Event('hashchange'));
+      try {
+        await store.addHoliday({ date, name, type });
+        toast('Added!', 'success');
+        closeModal();
+      } catch (err) {
+        toast(err.message || 'Failed to add holiday/leave', 'error');
+      }
     };
   });
 
@@ -184,10 +189,13 @@ export function mount() {
     btn.addEventListener('click', async () => {
       const dateToRemove = btn.dataset.date;
       if (await confirmDialog('Delete this holiday/leave?')) {
-        await store.removeHoliday(dateToRemove);
-        toast('Removed', 'info');
-        closeModal();
-        window.dispatchEvent(new Event('hashchange'));
+        try {
+          await store.removeHoliday(dateToRemove);
+          toast('Removed', 'info');
+          closeModal();
+        } catch (err) {
+          toast(err.message || 'Failed to remove holiday/leave', 'error');
+        }
       }
     });
   });

@@ -2,7 +2,7 @@ import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 import { MONTHS, getDayName, getDaysInMonth, toast, fmtTimeStr } from '../utils.js';
 
-export function exportDTRtoPDF(entries, month, year, profile, settings) {
+export function exportDTRtoPDF(entries, holidays, month, year, profile, settings) {
   try {
     // Folio Portrait format (8.5 x 13 inches)
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: [215.9, 330.2] });
@@ -32,14 +32,16 @@ export function exportDTRtoPDF(entries, month, year, profile, settings) {
       const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
       const dayName = getDayName(dateStr);
       const e = entries.find(x => x.date === dateStr);
+      const holiday = holidays.find(x => x.date === dateStr);
+      const holidayType = holiday ? holiday.type.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase()) : '';
       tableData.push([
         d, dayName,
         fmtTimeStr(e?.amTimeIn), fmtTimeStr(e?.amTimeOut),
         fmtTimeStr(e?.pmTimeIn), fmtTimeStr(e?.pmTimeOut),
         (e?.amTimeOut || e?.pmTimeOut) ? e.hoursRendered.toFixed(2) : '',
         e?.overtimeHours > 0 ? e.overtimeHours.toFixed(2) : '',
-        e?.activities || '',
-        e?.remarks || '',
+        e?.activities || holiday?.name || '',
+        e?.remarks || holidayType || '',
       ]);
     }
 

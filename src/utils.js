@@ -83,7 +83,14 @@ export function getDayName(d) {
 
 export const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
-export function getCurrentDate() { return new Date().toISOString().split('T')[0]; }
+export function toLocalDateString(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+export function getCurrentDate() { return toLocalDateString(new Date()); }
 
 export function getCurrentTime() {
   const n = new Date();
@@ -102,6 +109,10 @@ export function toast(msg, type = 'success') {
   setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); }, 3000);
 }
 
+export function requestRender() {
+  document.dispatchEvent(new CustomEvent('app:rerender'));
+}
+
 // --- Modal ---
 export function openModal(html) {
   closeModal();
@@ -118,7 +129,13 @@ export function openModal(html) {
 
 export function closeModal() {
   const o = document.querySelector('.modal-overlay');
-  if (o) { o.classList.remove('show'); setTimeout(() => o.remove(), 300); }
+  if (o) {
+    o.classList.remove('show');
+    setTimeout(() => {
+      o.remove();
+      document.dispatchEvent(new CustomEvent('modal-closed'));
+    }, 300);
+  }
 }
 
 // --- Confirm Dialog ---

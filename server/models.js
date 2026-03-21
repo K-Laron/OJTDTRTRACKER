@@ -57,7 +57,18 @@ const configSchema = new mongoose.Schema({
   theme: String
 });
 
+const auditEventSchema = new mongoose.Schema({
+  userId: { type: String, required: true, index: true },
+  entity: { type: String, required: true },
+  action: { type: String, required: true },
+  before: { type: mongoose.Schema.Types.Mixed, default: null },
+  after: { type: mongoose.Schema.Types.Mixed, default: null },
+  meta: { type: mongoose.Schema.Types.Mixed, default: null },
+  ts: { type: Date, default: Date.now, index: true },
+});
+
 export const User = mongoose.model('User', userSchema);
 export const Entry = mongoose.model('Entry', entrySchema);
 export const Holiday = mongoose.model('Holiday', holidaySchema);
 export const Config = mongoose.model('Config', configSchema);
+export const AuditEvent = mongoose.model('AuditEvent', auditEventSchema);

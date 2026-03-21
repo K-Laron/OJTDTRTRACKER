@@ -1,7 +1,7 @@
 import * as XLSX from 'xlsx';
 import { MONTHS, getDayName, getDaysInMonth, toast, fmtTimeStr } from '../utils.js';
 
-export function exportDTRtoExcel(entries, month, year, profile, settings) {
+export function exportDTRtoExcel(entries, holidays, month, year, profile, settings) {
   try {
     const data = [
       ['DAILY TIME RECORD'],
@@ -18,6 +18,8 @@ export function exportDTRtoExcel(entries, month, year, profile, settings) {
     for (let d = 1; d <= daysInMonth; d++) {
       const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
       const e = entries.find(x => x.date === dateStr);
+      const holiday = holidays.find(x => x.date === dateStr);
+      const holidayType = holiday ? holiday.type.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase()) : '';
       data.push([
         d,
         getDayName(dateStr),
@@ -29,8 +31,8 @@ export function exportDTRtoExcel(entries, month, year, profile, settings) {
         e?.overtimeHours > 0 ? parseFloat(e.overtimeHours.toFixed(2)) : '',
         e?.lateMinutes || '',
         e?.undertimeMinutes || '',
-        e?.activities || '',
-        e?.remarks || '',
+        e?.activities || holiday?.name || '',
+        e?.remarks || holidayType || '',
       ]);
     }
 
