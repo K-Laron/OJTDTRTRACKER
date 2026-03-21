@@ -43,7 +43,7 @@ OJT DTR TRACKER
   Expected binary path:
   `C:\Program Files\MongoDB\Server\8.2\bin\mongod.exe`
 
-If your MongoDB installation lives elsewhere, update the path in [`C:\Users\TESS LARON\Desktop\OJT DTR TRACKER\scripts\Start-LocalMongoReplicaSet.ps1`](/C:/Users/TESS%20LARON/Desktop/OJT%20DTR%20TRACKER/scripts/Start-LocalMongoReplicaSet.ps1).
+If your MongoDB installation lives elsewhere, update the path in `scripts/Start-LocalMongoReplicaSet.ps1`.
 
 ## Install
 
@@ -95,7 +95,7 @@ npm test
 
 This project is configured to use a workspace-local MongoDB instance on `127.0.0.1:27018` so transaction support does not depend on editing the Windows MongoDB service.
 
-See [`C:\Users\TESS LARON\Desktop\OJT DTR TRACKER\LOCAL_SETUP.md`](/C:/Users/TESS%20LARON/Desktop/OJT%20DTR%20TRACKER/LOCAL_SETUP.md) for full setup details.
+See `LOCAL_SETUP.md` for full setup details.
 
 Quick start:
 
