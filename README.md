@@ -9,6 +9,7 @@ OJT DTR Tracker is a local-first daily time record system built for On-the-Job T
 - Generates DTR views plus PDF and Excel exports
 - Shows attendance summaries, reports, and activity history
 - Supports holiday and leave tagging
+- Automatically syncs Philippine public holidays from a public API
 - Supports JSON export, previewed import, and restore from audit snapshots
 - Uses local MongoDB with replica-set support for safer transactional writes
 

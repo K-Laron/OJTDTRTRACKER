@@ -27,7 +27,8 @@ const holidaySchema = new mongoose.Schema({
   userId: { type: String, required: true },
   date: { type: String, required: true },
   name: String,
-  type: { type: String, enum: ['holiday', 'sick_leave', 'vacation_leave'] }
+  type: { type: String, enum: ['holiday', 'sick_leave', 'vacation_leave'] },
+  source: { type: String, enum: ['manual', 'public_api'], default: 'manual' }
 });
 
 const configSchema = new mongoose.Schema({

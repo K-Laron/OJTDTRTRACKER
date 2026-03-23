@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { AuditEvent, User, Entry, Holiday, Config } from './models.js';
+import { syncPhilippinePublicHolidays } from './holiday-sync.js';
 import {
   buildImportPreview,
   DEFAULT_SETTINGS,
@@ -165,6 +166,19 @@ function getErrorStatus(err) {
   if (err?.code === 11000) return 400;
   if (typeof err?.message === 'string' && err.message) return 400;
   return 500;
+}
+
+function getHolidaySyncYears(config) {
+  const currentYear = new Date().getFullYear();
+  const startYear = Number.parseInt(config?.profile?.startDate?.slice(0, 4), 10);
+  const earliestYear = Number.isInteger(startYear) ? Math.min(startYear, currentYear) : currentYear;
+  const years = [];
+
+  for (let year = earliestYear; year <= currentYear + 1; year += 1) {
+    years.push(year);
+  }
+
+  return years;
 }
 
 function toConflictResponse(current, resolution) {
@@ -382,7 +396,18 @@ app.delete('/api/entries/:id', requireAuth, async (req, res) => {
 // Holidays
 app.get('/api/holidays', requireAuth, async (req, res) => {
   try {
-    const holidays = await Holiday.find({ userId: req.userId }).lean();
+    const config = await Config.findOne({ userId: req.userId }).lean();
+    try {
+      await syncPhilippinePublicHolidays({
+        userId: req.userId,
+        years: getHolidaySyncYears(config),
+        HolidayModel: Holiday,
+      });
+    } catch (syncErr) {
+      console.error('Philippine holiday sync error:', syncErr);
+    }
+
+    const holidays = await Holiday.find({ userId: req.userId }).sort({ date: 1 }).lean();
     res.json(holidays);
   } catch (err) {
     console.error('Fetch holidays error:', err);

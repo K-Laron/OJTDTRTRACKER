@@ -15,6 +15,7 @@ export const DEFAULT_SETTINGS = {
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^\d{2}:\d{2}$/;
 const HOLIDAY_TYPES = new Set(['holiday', 'sick_leave', 'vacation_leave']);
+const HOLIDAY_SOURCES = new Set(['manual', 'public_api']);
 const ENTRY_EDITABLE_FIELDS = ['date', 'amTimeIn', 'amTimeOut', 'pmTimeIn', 'pmTimeOut', 'remarks', 'activities'];
 
 function toNumber(value, fallback) {
@@ -123,6 +124,7 @@ export function sanitizeHoliday(input = {}) {
   const date = assertDate(input.date, 'Holiday date');
   const name = normalizeText(input.name);
   const type = normalizeText(input.type) || 'holiday';
+  const source = normalizeText(input.source) || 'manual';
 
   if (!name) {
     throw new Error('Holiday name is required');
@@ -130,8 +132,11 @@ export function sanitizeHoliday(input = {}) {
   if (!HOLIDAY_TYPES.has(type)) {
     throw new Error('Holiday type is invalid');
   }
+  if (!HOLIDAY_SOURCES.has(source)) {
+    throw new Error('Holiday source is invalid');
+  }
 
-  return { date, name, type };
+  return { date, name, type, source };
 }
 
 function getComparableEntry(entry = {}) {
@@ -157,6 +162,7 @@ function getComparableHoliday(holiday = {}) {
     date: holiday.date || '',
     name: holiday.name || '',
     type: holiday.type || '',
+    source: holiday.source || 'manual',
   };
 }
 

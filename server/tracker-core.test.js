@@ -6,6 +6,7 @@ import {
   entriesConflict,
   resolveEntryUpdate,
   sanitizeEntry,
+  sanitizeHoliday,
   sanitizeImportPayload,
 } from './tracker-core.js';
 
@@ -70,6 +71,18 @@ test('sanitizeImportPayload rejects duplicate ids and duplicate holiday dates', 
       ],
     });
   }, /Duplicate holiday date/);
+});
+
+test('sanitizeHoliday defaults manual source and accepts public API source', () => {
+  assert.deepEqual(
+    sanitizeHoliday({ date: '2026-06-12', name: 'Araw ng Kalayaan', type: 'holiday' }),
+    { date: '2026-06-12', name: 'Araw ng Kalayaan', type: 'holiday', source: 'manual' }
+  );
+
+  assert.deepEqual(
+    sanitizeHoliday({ date: '2026-06-12', name: 'Araw ng Kalayaan', type: 'holiday', source: 'public_api' }),
+    { date: '2026-06-12', name: 'Araw ng Kalayaan', type: 'holiday', source: 'public_api' }
+  );
 });
 
 test('sanitizeImportPayload recalculates imported entries using imported settings', () => {
@@ -172,7 +185,7 @@ test('buildImportPreview reports added, changed, and removed items', () => {
         { id: 'new', date: '2026-03-22', amTimeIn: '08:00', amTimeOut: '12:00' },
       ],
       holidays: [
-        { date: '2026-03-25', name: 'Holiday', type: 'holiday' },
+        { date: '2026-03-25', name: 'Holiday', type: 'holiday', source: 'manual' },
       ],
     }),
     {
@@ -184,7 +197,7 @@ test('buildImportPreview reports added, changed, and removed items', () => {
         { id: 'remove', date: '2026-03-23', amTimeIn: '08:00', amTimeOut: '12:00' },
       ],
       holidays: [
-        { date: '2026-03-26', name: 'Old Holiday', type: 'holiday' },
+        { date: '2026-03-26', name: 'Old Holiday', type: 'holiday', source: 'manual' },
       ],
     }
   );

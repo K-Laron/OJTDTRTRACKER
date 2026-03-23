@@ -63,6 +63,10 @@ export function render() {
       </div>
     </div>
 
+    <div class="card mb-6">
+      <p class="text-muted">Philippine public holidays are synced automatically from a public calendar API. Use Add Holiday/Leave only for extra manual dates.</p>
+    </div>
+
     <!-- Attendance Summary -->
     <div class="card-grid card-grid-4 mb-6">
       <div class="stat-card primary"><div class="stat-label">Present</div><div class="stat-value">${summary.present}</div><div class="stat-sub">days this month</div></div>
