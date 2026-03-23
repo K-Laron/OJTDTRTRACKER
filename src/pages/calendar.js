@@ -5,6 +5,17 @@ import { fmtHours, getDayName, getDaysInMonth, MONTHS, ICONS,
 let selYear = new Date().getFullYear();
 let selMonth = new Date().getMonth();
 
+async function ensureVisibleYearHolidays(force = false) {
+  if (!store.userId) return;
+
+  try {
+    const holidays = await store.refreshHolidays([selYear], { force });
+    if (!Array.isArray(holidays)) return;
+  } catch (err) {
+    console.error('[Calendar] Failed to refresh holidays for visible year:', err);
+  }
+}
+
 function getDayStatus(dateStr) {
   const entry = store.state.entries.find(e => e.date === dateStr);
   const holiday = store.isHoliday(dateStr);
@@ -120,16 +131,21 @@ export function render() {
 export function mount() {
   document.getElementById('cal-prev')?.addEventListener('click', () => {
     selMonth--; if (selMonth < 0) { selMonth = 11; selYear--; }
+    void ensureVisibleYearHolidays();
     requestRender();
   });
   document.getElementById('cal-next')?.addEventListener('click', () => {
     selMonth++; if (selMonth > 11) { selMonth = 0; selYear++; }
+    void ensureVisibleYearHolidays();
     requestRender();
   });
   document.getElementById('cal-today-btn')?.addEventListener('click', () => {
     selYear = new Date().getFullYear(); selMonth = new Date().getMonth();
+    void ensureVisibleYearHolidays();
     requestRender();
   });
+
+  void ensureVisibleYearHolidays(true);
 
   // Click on day cell to view entry
   document.querySelectorAll('.cal-cell[data-date]').forEach(cell => {

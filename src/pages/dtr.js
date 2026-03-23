@@ -10,6 +10,17 @@ let monthLoading = false;
 let monthError = '';
 let monthRequestId = 0;
 
+async function ensureVisibleYearHolidays(force = false) {
+  if (!store.userId) return;
+
+  try {
+    const holidays = await store.refreshHolidays([selYear], { force });
+    if (!Array.isArray(holidays)) return;
+  } catch (err) {
+    console.error('[DTR] Failed to refresh holidays for visible year:', err);
+  }
+}
+
 function getMonthBounds(year, month) {
   const monthString = String(month + 1).padStart(2, '0');
   return {
@@ -219,6 +230,7 @@ function bindDtrEvents(root) {
       }
       invalidateMonthEntries();
       refreshDtr(root);
+      void ensureVisibleYearHolidays();
       void loadMonthEntries(true);
       return;
     }
@@ -232,6 +244,7 @@ function bindDtrEvents(root) {
       }
       invalidateMonthEntries();
       refreshDtr(root);
+      void ensureVisibleYearHolidays();
       void loadMonthEntries(true);
       return;
     }
@@ -271,6 +284,7 @@ export function mount(container) {
   if (!root) return;
   bindDtrEvents(root);
   refreshDtr(root);
+  void ensureVisibleYearHolidays(true);
   void loadMonthEntries();
 }
 

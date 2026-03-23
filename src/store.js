@@ -52,6 +52,7 @@ class Store {
     this.pendingLocalSyncSkips = 0;
     this.syncInFlight = null;
     this.syncQueued = new Set();
+    this.syncedHolidayYears = new Set();
     this.userId = localStorage.getItem('dtr_user_id') || null;
     this.username = localStorage.getItem('dtr_username') || null;
     if (this.userId) {
@@ -149,6 +150,9 @@ class Store {
 
     if (resources.includes('holidays')) {
       this.state.holidays = holidays;
+      this.syncedHolidayYears = new Set((Array.isArray(holidays) ? holidays : [])
+        .map(holiday => Number.parseInt(String(holiday?.date || '').slice(0, 4), 10))
+        .filter(year => Number.isInteger(year)));
       changedResources.push('holidays');
     }
 
@@ -315,6 +319,7 @@ class Store {
     localStorage.removeItem('dtr_username');
     if (this.evtSource) { this.evtSource.close(); this.evtSource = null; }
     this.state = structuredClone(DEFAULT_STATE);
+    this.syncedHolidayYears = new Set();
     document.body.className = '';
     this.isHydrating = false;
     this._markResourcesChanged(['entries', 'holidays', 'config', 'auth']);
@@ -505,11 +510,56 @@ class Store {
     this.state.settings = { ...DEFAULT_STATE.settings, ...savedConfig.settings };
     this.state.theme = savedConfig.theme || 'dark';
     document.body.className = this.state.theme === 'light' ? 'light-theme' : '';
+
+    await this.refreshHolidays([], { force: true }).catch(err => {
+      console.error('[Store] Failed to refresh holidays after config update:', err);
+      return null;
+    });
+
     this._markResourcesChanged(['config']);
     this._notify({ resources: ['config'] });
   }
 
   // --- Holidays ---
+  async fetchHolidays(years = []) {
+    const normalizedYears = [...new Set((Array.isArray(years) ? years : [])
+      .map(year => Number.parseInt(year, 10))
+      .filter(year => Number.isInteger(year) && year >= 1900 && year <= 2100))]
+      .sort((a, b) => a - b);
+
+    const params = new URLSearchParams();
+    if (normalizedYears.length) params.set('years', normalizedYears.join(','));
+
+    return this._request(`/holidays${params.toString() ? `?${params}` : ''}`, {
+      headers: { 'X-User-Id': this.userId }
+    }, { logoutOn401: true });
+  }
+
+  async refreshHolidays(years = [], { force = false } = {}) {
+    const normalizedYears = [...new Set((Array.isArray(years) ? years : [])
+      .map(year => Number.parseInt(year, 10))
+      .filter(year => Number.isInteger(year) && year >= 1900 && year <= 2100))]
+      .sort((a, b) => a - b);
+
+    if (!force && normalizedYears.length && normalizedYears.every(year => this.syncedHolidayYears.has(year))) {
+      return this.state.holidays;
+    }
+
+    const holidays = await this.fetchHolidays(years);
+    if (!Array.isArray(holidays)) return null;
+    this.state.holidays = holidays;
+    if (normalizedYears.length) {
+      normalizedYears.forEach(year => this.syncedHolidayYears.add(year));
+    } else {
+      this.syncedHolidayYears = new Set(holidays
+        .map(holiday => Number.parseInt(String(holiday?.date || '').slice(0, 4), 10))
+        .filter(year => Number.isInteger(year)));
+    }
+    this._markResourcesChanged(['holidays']);
+    this._notify({ resources: ['holidays'] });
+    return holidays;
+  }
+
   async addHoliday(h) {
     if (!this.state.holidays.find(x => x.date === h.date)) {
       this._queueLocalSyncSkip();

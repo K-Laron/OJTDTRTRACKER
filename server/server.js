@@ -181,6 +181,23 @@ function getHolidaySyncYears(config) {
   return years;
 }
 
+function getRequestedHolidaySyncYears(req, config) {
+  const requestedYears = [
+    req.query.year,
+    ...(Array.isArray(req.query.years)
+      ? req.query.years
+      : typeof req.query.years === 'string'
+        ? req.query.years.split(',')
+        : []),
+  ]
+    .flatMap(value => (Array.isArray(value) ? value : [value]))
+    .map(value => Number.parseInt(String(value).trim(), 10))
+    .filter(year => Number.isInteger(year) && year >= 1900 && year <= 2100);
+
+  const fallbackYears = getHolidaySyncYears(config);
+  return [...new Set([...(requestedYears.length ? requestedYears : []), ...fallbackYears])].sort((a, b) => a - b);
+}
+
 function toConflictResponse(current, resolution) {
   return {
     error: 'Entry changed elsewhere',
@@ -400,7 +417,7 @@ app.get('/api/holidays', requireAuth, async (req, res) => {
     try {
       await syncPhilippinePublicHolidays({
         userId: req.userId,
-        years: getHolidaySyncYears(config),
+        years: getRequestedHolidaySyncYears(req, config),
         HolidayModel: Holiday,
       });
     } catch (syncErr) {
