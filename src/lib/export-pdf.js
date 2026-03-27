@@ -4,6 +4,7 @@ import { MONTHS, getDayName, getDaysInMonth, toast, fmtTimeStr } from '../utils.
 
 export function exportDTRtoPDF(entries, holidays, month, year, profile, settings) {
   try {
+    const scheduleText = `${fmtTimeStr(settings.expectedTimeIn)} - ${fmtTimeStr(settings.expectedTimeOut)}`;
     // Folio Portrait format (8.5 x 13 inches)
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: [215.9, 330.2] });
 
@@ -23,7 +24,7 @@ export function exportDTRtoPDF(entries, holidays, month, year, profile, settings
     doc.text(`Month/Year: ${MONTHS[month]} ${year}`, 10, y0 + 6);
     doc.text(`Supervisor: ${profile.supervisor || '_______________'}`, 130, y0 + 6);
     doc.text(`Position: ${profile.position || 'OJT Trainee'}`, 10, y0 + 12);
-    doc.text(`Schedule: ${settings.expectedTimeIn} - ${settings.expectedTimeOut}`, 130, y0 + 12);
+    doc.text(`Schedule: ${scheduleText}`, 130, y0 + 12);
 
     // Build table
     const daysInMonth = getDaysInMonth(year, month);

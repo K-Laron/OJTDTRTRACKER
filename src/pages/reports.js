@@ -248,8 +248,8 @@ function renderSnapshotDetails(snapshot, entity) {
       <div class="progress-details">
         <div class="detail-row"><span class="detail-label">Profile</span><span class="detail-value">${snapshot.profile?.name || '--'}</span></div>
         <div class="detail-row"><span class="detail-label">Theme</span><span class="detail-value">${snapshot.theme || '--'}</span></div>
-        <div class="detail-row"><span class="detail-label">Expected Time In</span><span class="detail-value">${snapshot.settings?.expectedTimeIn || '--'}</span></div>
-        <div class="detail-row"><span class="detail-label">Expected Time Out</span><span class="detail-value">${snapshot.settings?.expectedTimeOut || '--'}</span></div>
+        <div class="detail-row"><span class="detail-label">Expected Time In</span><span class="detail-value">${fmtTimeStr(snapshot.settings?.expectedTimeIn)}</span></div>
+        <div class="detail-row"><span class="detail-label">Expected Time Out</span><span class="detail-value">${fmtTimeStr(snapshot.settings?.expectedTimeOut)}</span></div>
         <div class="detail-row"><span class="detail-label">Required Hours</span><span class="detail-value">${snapshot.settings?.requiredHours ?? '--'}</span></div>
       </div>
     `;

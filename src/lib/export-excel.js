@@ -3,13 +3,14 @@ import { MONTHS, getDayName, getDaysInMonth, toast, fmtTimeStr } from '../utils.
 
 export function exportDTRtoExcel(entries, holidays, month, year, profile, settings) {
   try {
+    const scheduleText = `${fmtTimeStr(settings.expectedTimeIn)} - ${fmtTimeStr(settings.expectedTimeOut)}`;
     const data = [
       ['DAILY TIME RECORD'],
       ['Civil Service Form No. 48'],
       [],
       [`Name: ${profile.name || ''}`, '', '', `Department: ${profile.department || ''}`],
       [`Month/Year: ${MONTHS[month]} ${year}`, '', '', `Supervisor: ${profile.supervisor || ''}`],
-      [`Position: ${profile.position || 'OJT Trainee'}`, '', '', `Schedule: ${settings.expectedTimeIn} - ${settings.expectedTimeOut}`],
+      [`Position: ${profile.position || 'OJT Trainee'}`, '', '', `Schedule: ${scheduleText}`],
       [],
       ['Day', 'Day Name', 'AM In', 'AM Out', 'PM In', 'PM Out', 'Hours Rendered', 'Overtime', 'Late (min)', 'Undertime (min)', 'Activities', 'Remarks'],
     ];

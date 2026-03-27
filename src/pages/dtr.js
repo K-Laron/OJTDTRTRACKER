@@ -102,6 +102,7 @@ function renderSheetContent() {
   const holidays = store.getHolidaysInMonth(selYear, selMonth);
   const daysInMonth = getDaysInMonth(selYear, selMonth);
   const profile = store.state.profile;
+  const scheduleText = `${fmtTimeStr(store.state.settings.expectedTimeIn)} - ${fmtTimeStr(store.state.settings.expectedTimeOut)}`;
   const totalHours = entries.reduce((sum, entry) => sum + (entry.hoursRendered || 0), 0);
   const totalOvertime = entries.reduce((sum, entry) => sum + (entry.overtimeHours || 0), 0);
 
@@ -148,7 +149,7 @@ function renderSheetContent() {
         <div class="info-field"><span class="info-label">Month/Year:</span><span class="info-value">${MONTHS[selMonth]} ${selYear}</span></div>
         <div class="info-field"><span class="info-label">Supervisor:</span><span class="info-value">${profile.supervisor || '_______________'}</span></div>
         <div class="info-field"><span class="info-label">Position:</span><span class="info-value">${profile.position || 'OJT Trainee'}</span></div>
-        <div class="info-field"><span class="info-label">Schedule:</span><span class="info-value">${store.state.settings.expectedTimeIn} - ${store.state.settings.expectedTimeOut}</span></div>
+        <div class="info-field"><span class="info-label">Schedule:</span><span class="info-value">${scheduleText}</span></div>
       </div>
 
       <div class="table-wrap">
