@@ -30,6 +30,17 @@ function toLocalDateString(date = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
+function getYearMonthKey(year, month) {
+  return `${year}-${String(month + 1).padStart(2, '0')}`;
+}
+
+function getWeekStartKey(dateString) {
+  const date = new Date(`${dateString}T00:00:00`);
+  const weekStart = new Date(date);
+  weekStart.setDate(date.getDate() - date.getDay());
+  return toLocalDateString(weekStart);
+}
+
 class Store {
   constructor() {
     this.state = structuredClone(DEFAULT_STATE);
@@ -46,9 +57,16 @@ class Store {
     this.initSequence = 0;
     this.sortedEntriesCache = [];
     this.sortedEntriesCacheVersion = -1;
+    this.entryDateCache = new Map();
+    this.entryDateCacheVersion = -1;
     this.monthEntriesCache = new Map();
+    this.holidayDateCache = new Map();
+    this.holidayDateCacheVersion = -1;
+    this.monthHolidaysCache = new Map();
     this.summaryStatsCache = null;
     this.summaryStatsCacheVersion = -1;
+    this.trendDataCache = null;
+    this.trendDataCacheVersion = -1;
     this.pendingLocalSyncSkips = 0;
     this.syncInFlight = null;
     this.syncQueued = new Set();
@@ -104,9 +122,19 @@ class Store {
 
   _invalidateEntryCaches() {
     this.sortedEntriesCacheVersion = -1;
+    this.entryDateCache = new Map();
+    this.entryDateCacheVersion = -1;
     this.monthEntriesCache.clear();
     this.summaryStatsCache = null;
     this.summaryStatsCacheVersion = -1;
+    this.trendDataCache = null;
+    this.trendDataCacheVersion = -1;
+  }
+
+  _invalidateHolidayCaches() {
+    this.holidayDateCache = new Map();
+    this.holidayDateCacheVersion = -1;
+    this.monthHolidaysCache.clear();
   }
 
   _markResourcesChanged(resources = []) {
@@ -120,6 +148,9 @@ class Store {
     });
     if (uniqueResources.includes('entries')) {
       this._invalidateEntryCaches();
+    }
+    if (uniqueResources.includes('holidays')) {
+      this._invalidateHolidayCaches();
     }
     return uniqueResources;
   }
@@ -418,6 +449,63 @@ class Store {
 
   getEntry(id) { return this.state.entries.find(e => e.id === id) || null; }
 
+  _getEntryDateMap() {
+    const entriesVersion = this.getResourceVersion('entries');
+    if (this.entryDateCacheVersion !== entriesVersion) {
+      this.entryDateCache = new Map(this.state.entries.map(entry => [entry.date, entry]));
+      this.entryDateCacheVersion = entriesVersion;
+    }
+    return this.entryDateCache;
+  }
+
+  _getHolidayDateMap() {
+    const holidaysVersion = this.getResourceVersion('holidays');
+    if (this.holidayDateCacheVersion !== holidaysVersion) {
+      this.holidayDateCache = new Map(this.state.holidays.map(holiday => [holiday.date, holiday]));
+      this.holidayDateCacheVersion = holidaysVersion;
+    }
+    return this.holidayDateCache;
+  }
+
+  _getTrendData() {
+    const entriesVersion = this.getResourceVersion('entries');
+    if (this.trendDataCacheVersion === entriesVersion && this.trendDataCache) {
+      return this.trendDataCache;
+    }
+
+    const monthly = Object.create(null);
+    const weekly = Object.create(null);
+
+    for (const entry of this.state.entries) {
+      if (!entry.amTimeOut && !entry.pmTimeOut) continue;
+
+      const monthKey = entry.date.slice(0, 7);
+      if (!monthly[monthKey]) {
+        monthly[monthKey] = { hours: 0, ot: 0, late: 0, undertime: 0, days: 0 };
+      }
+      monthly[monthKey].hours += entry.hoursRendered || 0;
+      monthly[monthKey].ot += entry.overtimeHours || 0;
+      monthly[monthKey].late += entry.lateMinutes || 0;
+      monthly[monthKey].undertime += entry.undertimeMinutes || 0;
+      monthly[monthKey].days += 1;
+
+      const weekKey = getWeekStartKey(entry.date);
+      if (!weekly[weekKey]) {
+        weekly[weekKey] = { hours: 0, days: 0 };
+      }
+      weekly[weekKey].hours += entry.hoursRendered || 0;
+      weekly[weekKey].days += 1;
+    }
+
+    this.trendDataCache = { monthly, weekly };
+    this.trendDataCacheVersion = entriesVersion;
+    return this.trendDataCache;
+  }
+
+  getEntryByDate(date) {
+    return this._getEntryDateMap().get(date) || null;
+  }
+
   getActiveEntry() {
     return this.state.entries.find(e =>
       (e.amTimeIn && !e.amTimeOut) || (e.pmTimeIn && !e.pmTimeOut)
@@ -425,7 +513,7 @@ class Store {
   }
 
   getClockPhase(date) {
-    const entry = this.state.entries.find(e => e.date === date);
+    const entry = this.getEntryByDate(date);
     if (!entry) return { phase: 0, entry: null };
     if (entry.amTimeIn && !entry.amTimeOut) return { phase: 1, entry };
     if (!entry.pmTimeIn) return { phase: 2, entry };
@@ -434,15 +522,16 @@ class Store {
   }
 
   getEntriesByMonth(year, month) {
-    const key = `${year}-${month}`;
+    const key = getYearMonthKey(year, month);
     const entriesVersion = this.getResourceVersion('entries');
     const cached = this.monthEntriesCache.get(key);
     if (cached?.version === entriesVersion) {
       return cached.value;
     }
 
+    const prefix = `${key}-`;
     const value = this.state.entries
-      .filter(e => { const d = new Date(e.date); return d.getFullYear() === year && d.getMonth() === month; })
+      .filter(entry => entry.date.startsWith(prefix))
       .sort((a, b) => a.date.localeCompare(b.date));
     this.monthEntriesCache.set(key, { version: entriesVersion, value });
     return value;
@@ -623,9 +712,21 @@ class Store {
   }
 
   getHolidaysInMonth(y, m) {
-    return this.state.holidays.filter(h => { const d = new Date(h.date); return d.getFullYear() === y && d.getMonth() === m; });
+    const key = getYearMonthKey(y, m);
+    const holidaysVersion = this.getResourceVersion('holidays');
+    const cached = this.monthHolidaysCache.get(key);
+    if (cached?.version === holidaysVersion) {
+      return cached.value;
+    }
+
+    const prefix = `${key}-`;
+    const value = this.state.holidays
+      .filter(holiday => holiday.date.startsWith(prefix))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    this.monthHolidaysCache.set(key, { version: holidaysVersion, value });
+    return value;
   }
-  isHoliday(date) { return this.state.holidays.find(h => h.date === date) || null; }
+  isHoliday(date) { return this._getHolidayDateMap().get(date) || null; }
 
   // --- Theme ---
   async setTheme(t) { 
@@ -700,22 +801,24 @@ class Store {
   getRemainingHours() { return Math.max(0, this.getRequiredHours() - this.getTotalHours()); }
   getProgress() { const r = this.getRequiredHours(); return r === 0 ? 0 : Math.min(100, (this.getTotalHours() / r) * 100); }
   getDaysAttended() { return this._getSummaryStats().daysAttended; }
+  getMonthlyTrendData() { return this._getTrendData().monthly; }
+  getWeeklyTrendData() { return this._getTrendData().weekly; }
 
   getAttendanceSummary(year, month) {
     const entries = year != null ? this.getEntriesByMonth(year, month) : this.state.entries;
-    const holidays = this.state.holidays;
+    const holidays = year != null ? this.getHolidaysInMonth(year, month) : this.state.holidays;
     let present = 0, late = 0, onLeave = 0;
     const entryDates = new Set();
     entries.forEach(e => {
       if (e.amTimeOut || e.pmTimeOut) { present++; entryDates.add(e.date); }
       if (e.lateMinutes > 0) late++;
     });
+    let holidayCount = 0;
     holidays.forEach(h => {
-      if (year == null || (new Date(h.date).getFullYear() === year && new Date(h.date).getMonth() === month)) {
-        if (h.type !== 'holiday') onLeave++;
-      }
+      if (h.type === 'holiday') holidayCount++;
+      else onLeave++;
     });
-    return { present, late, onLeave, holidays: holidays.filter(h => h.type === 'holiday').length };
+    return { present, late, onLeave, holidays: holidayCount };
   }
 
   getCompletionEstimate() {

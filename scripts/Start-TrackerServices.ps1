@@ -5,6 +5,7 @@ $runtimeDir = Join-Path $root ".runtime"
 $pidFile = Join-Path $runtimeDir "tracker-pids.json"
 $serverLog = Join-Path $runtimeDir "server.log"
 $viteLog = Join-Path $runtimeDir "vite.log"
+$localMongoUri = "mongodb://127.0.0.1:27018/ojt_dtr_tracker?replicaSet=rs0"
 
 New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
 
@@ -41,7 +42,7 @@ $started = [ordered]@{
 
 if (-not (Test-PortListening -Port 5000)) {
   $backend = Start-Process -FilePath "cmd.exe" `
-    -ArgumentList "/c", "node server.js 1>> `"$serverLog`" 2>>&1" `
+    -ArgumentList "/c", "set `"MONGODB_URI=$localMongoUri`" && set `"PORT=5000`" && node server.js 1>> `"$serverLog`" 2>>&1" `
     -WorkingDirectory (Join-Path $root "server") `
     -WindowStyle Hidden `
     -PassThru

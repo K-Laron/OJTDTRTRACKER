@@ -12,43 +12,6 @@ function formatAuditTimestamp(value) {
   return new Date(value).toLocaleString('en-PH', { timeZone: 'Asia/Manila' });
 }
 
-function toLocalDateString(date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-function getMonthlyData() {
-  const months = {};
-  store.state.entries.forEach(e => {
-    if (!e.amTimeOut && !e.pmTimeOut) return;
-    const key = e.date.slice(0, 7);
-    if (!months[key]) months[key] = { hours: 0, ot: 0, late: 0, undertime: 0, days: 0 };
-    months[key].hours += e.hoursRendered || 0;
-    months[key].ot += e.overtimeHours || 0;
-    months[key].late += e.lateMinutes || 0;
-    months[key].undertime += e.undertimeMinutes || 0;
-    months[key].days++;
-  });
-  return months;
-}
-
-function getWeeklyData() {
-  const weeks = {};
-  store.state.entries.forEach(e => {
-    if (!e.amTimeOut && !e.pmTimeOut) return;
-    const d = new Date(e.date + 'T00:00:00');
-    const start = new Date(d);
-    start.setDate(d.getDate() - d.getDay());
-    const key = toLocalDateString(start);
-    if (!weeks[key]) weeks[key] = { hours: 0, days: 0 };
-    weeks[key].hours += e.hoursRendered || 0;
-    weeks[key].days++;
-  });
-  return weeks;
-}
-
 function renderOverview() {
   const totalHrs = store.getTotalHours();
   const totalOT = store.getTotalOvertime();
@@ -77,7 +40,7 @@ function renderOverview() {
 }
 
 function renderMonthly() {
-  const data = getMonthlyData();
+  const data = store.getMonthlyTrendData();
   const keys = Object.keys(data).sort();
   if (!keys.length) return '<div class="card"><div class="empty-state"><h4>No monthly data yet</h4></div></div>';
 
@@ -120,7 +83,7 @@ function renderMonthly() {
 }
 
 function renderWeekly() {
-  const data = getWeeklyData();
+  const data = store.getWeeklyTrendData();
   const keys = Object.keys(data).sort().slice(-12);
   if (!keys.length) return '<div class="card"><div class="empty-state"><h4>No weekly data yet</h4></div></div>';
 

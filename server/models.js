@@ -68,6 +68,10 @@ const auditEventSchema = new mongoose.Schema({
   ts: { type: Date, default: Date.now, index: true },
 });
 
+entrySchema.index({ userId: 1, date: -1 });
+holidaySchema.index({ userId: 1, date: 1 });
+auditEventSchema.index({ userId: 1, ts: -1, _id: -1 });
+
 export const User = mongoose.model('User', userSchema);
 export const Entry = mongoose.model('Entry', entrySchema);
 export const Holiday = mongoose.model('Holiday', holidaySchema);

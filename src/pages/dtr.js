@@ -100,18 +100,21 @@ function renderHeader() {
 function renderSheetContent() {
   const entries = getVisibleEntries();
   const holidays = store.getHolidaysInMonth(selYear, selMonth);
+  const entriesByDate = new Map(entries.map(entry => [entry.date, entry]));
+  const holidaysByDate = new Map(holidays.map(holiday => [holiday.date, holiday]));
   const daysInMonth = getDaysInMonth(selYear, selMonth);
   const profile = store.state.profile;
   const scheduleText = `${fmtTimeStr(store.state.settings.expectedTimeIn)} - ${fmtTimeStr(store.state.settings.expectedTimeOut)}`;
   const totalHours = entries.reduce((sum, entry) => sum + (entry.hoursRendered || 0), 0);
   const totalOvertime = entries.reduce((sum, entry) => sum + (entry.overtimeHours || 0), 0);
+  const daysWorked = entries.reduce((count, entry) => count + ((entry.amTimeOut || entry.pmTimeOut) ? 1 : 0), 0);
 
   const rows = [];
   for (let day = 1; day <= daysInMonth; day++) {
     const dateStr = `${selYear}-${String(selMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     const dayName = getDayName(dateStr);
-    const entry = entries.find(item => item.date === dateStr);
-    const holiday = holidays.find(item => item.date === dateStr);
+    const entry = entriesByDate.get(dateStr);
+    const holiday = holidaysByDate.get(dateStr);
     const isWeekend = dayName === 'Sat' || dayName === 'Sun';
     const holidayLabel = holiday ? holiday.type.replace('_', ' ').replace(/\b\w/g, char => char.toUpperCase()) : '';
     const activityText = entry?.activities || holiday?.name || '';
@@ -177,7 +180,7 @@ function renderSheetContent() {
       <div class="dtr-totals">
         <div>Total Hours: <span>${totalHours.toFixed(2)}</span></div>
         <div>Overtime: <span>${totalOvertime.toFixed(2)}</span></div>
-        <div>Days Worked: <span>${entries.filter(entry => entry.amTimeOut || entry.pmTimeOut).length}</span></div>
+        <div>Days Worked: <span>${daysWorked}</span></div>
       </div>
 
       <div class="dtr-cert">

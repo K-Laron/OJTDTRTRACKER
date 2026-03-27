@@ -5,18 +5,18 @@ $runtimeDir = Join-Path $root ".runtime"
 $pidFile = Join-Path $runtimeDir "tracker-pids.json"
 
 function Stop-TrackedProcessTree {
-  param([Nullable[int]]$Pid)
+  param([Nullable[int]]$ProcessId)
 
-  if (-not $Pid) {
+  if (-not $ProcessId) {
     return
   }
 
-  $process = Get-Process -Id $Pid -ErrorAction SilentlyContinue
+  $process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
   if (-not $process) {
     return
   }
 
-  & taskkill /F /T /PID $Pid *> $null
+  & taskkill /F /T /PID $ProcessId *> $null
 }
 
 function Stop-PortProcess {
@@ -26,15 +26,15 @@ function Stop-PortProcess {
     Select-Object -ExpandProperty OwningProcess -Unique
 
   foreach ($listenerPid in $listeners) {
-    Stop-TrackedProcessTree -Pid $listenerPid
+    Stop-TrackedProcessTree -ProcessId $listenerPid
   }
 }
 
 if (Test-Path $pidFile) {
   try {
     $tracked = Get-Content -Path $pidFile -Raw | ConvertFrom-Json
-    Stop-TrackedProcessTree -Pid $tracked.backendPid
-    Stop-TrackedProcessTree -Pid $tracked.frontendPid
+    Stop-TrackedProcessTree -ProcessId $tracked.backendPid
+    Stop-TrackedProcessTree -ProcessId $tracked.frontendPid
   } finally {
     Remove-Item -Path $pidFile -Force -ErrorAction SilentlyContinue
   }

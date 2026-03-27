@@ -60,6 +60,7 @@ That launcher:
 
 - starts the optional workspace-local Mongo helper on port `27018`
 - starts the backend on port `5000` if it is not already listening
+- launches the backend with `MONGODB_URI=mongodb://127.0.0.1:27018/ojt_dtr_tracker?replicaSet=rs0`
 - starts the Vite frontend on port `5173` if it is not already listening
 - opens `http://localhost:5173`
 
@@ -98,13 +99,16 @@ node .\server.js
 
 ## MongoDB Connection Modes
 
-The backend reads `MONGODB_URI` from `server/.env` when present. If it is not set, the code falls back to:
+Launcher mode and manual mode are different on purpose:
+
+- `.\Start-Tracker.bat` and `scripts/Start-TrackerServices.ps1` force the backend to use the workspace-local replica set on `127.0.0.1:27018`.
+- Manual backend runs still read `MONGODB_URI` from `server/.env` when present. If it is not set, the code falls back to:
 
 ```text
 mongodb://localhost:27017/ojt_dtr_tracker
 ```
 
-The bundled local Mongo helper started by `scripts/Start-LocalMongoReplicaSet.ps1` runs on `127.0.0.1:27018` with replica set `rs0`. That helper is useful when you want a workspace-local transaction-capable Mongo instance, but the backend will only use it if your local `server/.env` points `MONGODB_URI` to that replica-set URI.
+The bundled local Mongo helper started by `scripts/Start-LocalMongoReplicaSet.ps1` runs on `127.0.0.1:27018` with replica set `rs0`. That helper is the default database path for the launcher flow and remains available for manual runs if you point `server/.env` at the same replica-set URI.
 
 Example local replica-set URI:
 
@@ -137,8 +141,9 @@ mongodb://127.0.0.1:27018/ojt_dtr_tracker?replicaSet=rs0
 - Server-side validation and recalculation of entry totals
 - Conflict detection and merge-aware stale update handling
 - Import preview before full replace
+- Larger JSON imports up to the backend request limit of `5 MB`
 - Audit trail with restore actions
-- Philippine public-holiday synchronization
+- Philippine public-holiday synchronization with cached retry backoff when the public API is unavailable
 - DTR printing plus PDF and Excel export
 - Reports, attendance summaries, and activity history
 

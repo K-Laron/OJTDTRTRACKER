@@ -1,6 +1,7 @@
 const PH_COUNTRY_CODE = 'PH';
 const HOLIDAY_API_BASE = 'https://date.nager.at/api/v3';
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const SUCCESS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const FAILURE_RETRY_TTL_MS = 60 * 60 * 1000;
 
 const holidayCache = new Map();
 const syncLocks = new Map();
@@ -17,12 +18,37 @@ function isIsoDate(value) {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
-function getYearBounds(years) {
-  const orderedYears = [...years].sort((a, b) => a - b);
-  return {
-    from: `${orderedYears[0]}-01-01`,
-    to: `${orderedYears[orderedYears.length - 1]}-12-31`,
-  };
+function buildYearFilters(years) {
+  return [...years]
+    .map(year => Number.parseInt(year, 10))
+    .filter(year => Number.isInteger(year) && year >= 1900 && year <= 2100)
+    .sort((a, b) => a - b)
+    .map(year => ({
+      year,
+      from: `${year}-01-01`,
+      to: `${year}-12-31`,
+    }));
+}
+
+function filterHolidaysByYears(holidays, years) {
+  const yearFilters = buildYearFilters(years);
+  if (!yearFilters.length) return [];
+
+  return (Array.isArray(holidays) ? holidays : [])
+    .filter(holiday => (
+      typeof holiday?.date === 'string'
+      && yearFilters.some(({ from, to }) => holiday.date >= from && holiday.date <= to)
+    ));
+}
+
+function applyBackfilledSources(existingHolidays, backfillDates) {
+  if (!backfillDates.length) return existingHolidays;
+  const backfillDateSet = new Set(backfillDates);
+  return existingHolidays.map(holiday => (
+    backfillDateSet.has(holiday.date)
+      ? { ...holiday, source: 'public_api' }
+      : holiday
+  ));
 }
 
 export function extractPhilippinePublicHolidays(payload) {
@@ -109,27 +135,57 @@ async function fetchPublicHolidayYear(year) {
   return extractPhilippinePublicHolidays(payload);
 }
 
-export async function getPhilippinePublicHolidaysForYear(year) {
+function validateHolidayYear(year) {
   const normalizedYear = Number.parseInt(year, 10);
   if (!Number.isInteger(normalizedYear) || normalizedYear < 1900 || normalizedYear > 2100) {
     throw new Error('Holiday sync year is invalid');
   }
+  return normalizedYear;
+}
+
+async function getHolidayYearFetchResult(year) {
+  const normalizedYear = validateHolidayYear(year);
 
   const now = Date.now();
   const cached = holidayCache.get(normalizedYear);
-  if (cached && (now - cached.ts) < CACHE_TTL_MS) {
-    return cached.value;
+  if (cached?.status === 'success' && (now - cached.ts) < SUCCESS_CACHE_TTL_MS) {
+    return { year: normalizedYear, holidays: cached.value, failed: false };
   }
 
-  const holidays = await fetchPublicHolidayYear(normalizedYear);
-  holidayCache.set(normalizedYear, { ts: now, value: holidays });
-  return holidays;
+  if (cached?.status === 'failure' && (now - cached.ts) < FAILURE_RETRY_TTL_MS) {
+    return { year: normalizedYear, holidays: cached.value || null, failed: !Array.isArray(cached.value) };
+  }
+
+  try {
+    const holidays = await fetchPublicHolidayYear(normalizedYear);
+    holidayCache.set(normalizedYear, { status: 'success', ts: now, value: holidays });
+    return { year: normalizedYear, holidays, failed: false };
+  } catch (error) {
+    const staleHolidays = Array.isArray(cached?.value) ? cached.value : null;
+    holidayCache.set(normalizedYear, {
+      status: 'failure',
+      ts: now,
+      value: staleHolidays,
+      error,
+    });
+    return { year: normalizedYear, holidays: staleHolidays, failed: !Array.isArray(staleHolidays) };
+  }
+}
+
+export async function getPhilippinePublicHolidaysForYear(year) {
+  const result = await getHolidayYearFetchResult(year);
+  if (result.failed) {
+    const cached = holidayCache.get(result.year);
+    throw cached?.error || new Error('Holiday API request failed');
+  }
+  return result.holidays;
 }
 
 export async function syncPhilippinePublicHolidays({
   userId,
   years,
   HolidayModel,
+  existingHolidays = null,
 }) {
   if (!userId) throw new Error('Holiday sync userId is required');
   if (!HolidayModel) throw new Error('Holiday sync model is required');
@@ -147,63 +203,88 @@ export async function syncPhilippinePublicHolidays({
   const currentLock = syncLocks.get(lockKey) || Promise.resolve();
   const nextLock = currentLock.then(async () => {
     const fetchedByYear = await Promise.all(
-      normalizedYears.map(async year => getPhilippinePublicHolidaysForYear(year))
+      normalizedYears.map(async year => getHolidayYearFetchResult(year))
     );
-    const incoming = fetchedByYear.flatMap(items => items);
-    const { from, to } = getYearBounds(normalizedYears);
+    const syncableYears = fetchedByYear
+      .filter(result => Array.isArray(result.holidays))
+      .map(result => result.year);
 
-    const existing = await HolidayModel
-      .find({
-        userId,
-        date: { $gte: from, $lte: to },
-      })
-      .lean();
-
-    const backfillDates = buildHolidaySourceBackfillPlan(existing, incoming);
-    if (backfillDates.length) {
-      await HolidayModel.updateMany(
-        {
-          userId,
-          date: { $in: backfillDates },
-          type: 'holiday',
-          $or: [
-            { source: { $exists: false } },
-            { source: null },
-            { source: '' },
-          ],
-        },
-        { $set: { source: 'public_api' } }
-      );
+    if (!syncableYears.length) {
+      return {
+        backfilled: 0,
+        inserted: 0,
+        updated: 0,
+        deleted: 0,
+        years: normalizedYears,
+        changed: false,
+      };
     }
 
-    const existingAfterBackfill = await HolidayModel
-      .find({
-        userId,
-        date: { $gte: from, $lte: to },
-      })
-      .lean();
+    const incoming = fetchedByYear.flatMap(result => result.holidays || []);
+    const yearFilters = buildYearFilters(syncableYears);
+
+    const existing = Array.isArray(existingHolidays)
+      ? filterHolidaysByYears(existingHolidays, syncableYears)
+      : await HolidayModel
+        .find({
+          userId,
+          $or: yearFilters.map(({ from, to }) => ({
+            date: { $gte: from, $lte: to },
+          })),
+        })
+        .lean();
+
+    const backfillDates = buildHolidaySourceBackfillPlan(existing, incoming);
+    const existingAfterBackfill = applyBackfilledSources(existing, backfillDates);
 
     const plan = buildHolidaySyncPlan(existingAfterBackfill, incoming);
 
-    if (plan.toInsert.length) {
-      await HolidayModel.insertMany(plan.toInsert.map(holiday => ({ ...holiday, userId })));
+    const bulkOps = [];
+    if (backfillDates.length) {
+      bulkOps.push({
+        updateMany: {
+          filter: {
+            userId,
+            date: { $in: backfillDates },
+            type: 'holiday',
+            $or: [
+              { source: { $exists: false } },
+              { source: null },
+              { source: '' },
+            ],
+          },
+          update: { $set: { source: 'public_api' } },
+        },
+      });
     }
 
-    if (plan.toUpdate.length) {
-      await Promise.all(
-        plan.toUpdate.map(item => HolidayModel.updateOne(
-          { userId, date: item.date, source: 'public_api' },
-          { $set: item.update }
-        ))
-      );
-    }
+    bulkOps.push(...plan.toInsert.map(holiday => ({
+      insertOne: {
+        document: { ...holiday, userId },
+      },
+    })));
+
+    bulkOps.push(...plan.toUpdate.map(item => ({
+      updateOne: {
+        filter: { userId, date: item.date, source: 'public_api' },
+        update: { $set: item.update },
+      },
+    })));
 
     if (plan.toDelete.length) {
-      await HolidayModel.deleteMany({
-        userId,
-        source: 'public_api',
-        date: { $in: plan.toDelete },
+      bulkOps.push({
+        deleteMany: {
+          filter: {
+            userId,
+            source: 'public_api',
+            date: { $in: plan.toDelete },
+          },
+        },
       });
+    }
+
+    if (bulkOps.length) {
+      await HolidayModel.bulkWrite(bulkOps, { ordered: false });
     }
 
     return {
@@ -212,6 +293,7 @@ export async function syncPhilippinePublicHolidays({
       updated: plan.toUpdate.length,
       deleted: plan.toDelete.length,
       years: normalizedYears,
+      changed: bulkOps.length > 0,
     };
   });
 

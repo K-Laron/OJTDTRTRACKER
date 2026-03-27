@@ -30,6 +30,8 @@ let visibleEntriesMeta = { page: 1, limit: PAGE_SIZE, total: 0, hasMore: false }
 let visibleEntriesLoading = false;
 let visibleEntriesError = '';
 let visibleEntriesRequestId = 0;
+let availableMonthsCache = [];
+let availableMonthsVersion = -1;
 
 function getMostCommonTime(field) {
   const entries = store.getAllEntries().slice(0, 5);
@@ -212,12 +214,32 @@ function invalidateVisibleEntries() {
   visibleEntriesError = '';
 }
 
-function getLocalFilteredEntries() {
-  let entries = store.getAllEntries();
-  if (filterMonth) {
-    entries = entries.filter(entry => entry.date.slice(0, 7) === filterMonth);
+function parseFilterMonth(value) {
+  if (!value) return null;
+  const [year, month] = value.split('-').map(Number);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) return null;
+  return { year, month: month - 1 };
+}
+
+function getAvailableMonths() {
+  const entriesVersion = store.getResourceVersion('entries');
+  if (availableMonthsVersion === entriesVersion) {
+    return availableMonthsCache;
   }
-  return entries;
+
+  availableMonthsCache = [...new Set(store.getAllEntries().map(entry => entry.date.slice(0, 7)))].sort().reverse();
+  availableMonthsVersion = entriesVersion;
+  return availableMonthsCache;
+}
+
+function getLocalFilteredEntries() {
+  if (!filterMonth) {
+    return store.getAllEntries();
+  }
+
+  const parsedMonth = parseFilterMonth(filterMonth);
+  if (!parsedMonth) return [];
+  return [...store.getEntriesByMonth(parsedMonth.year, parsedMonth.month)].sort((a, b) => b.date.localeCompare(a.date));
 }
 
 function getFallbackVisibleState() {
@@ -300,7 +322,7 @@ async function loadVisibleEntries(force = false) {
 }
 
 function renderMonthOptions() {
-  const months = [...new Set(store.getAllEntries().map(entry => entry.date.slice(0, 7)))].sort().reverse();
+  const months = getAvailableMonths();
   return [
     '<option value="">All Months</option>',
     ...months.map(month => `<option value="${month}" ${filterMonth === month ? 'selected' : ''}>${month}</option>`),
@@ -459,7 +481,6 @@ export function mount(container) {
   const root = getRoot(container);
   if (!root) return;
   bindTimelogEvents(root);
-  refreshTimelog(root);
   void loadVisibleEntries();
 }
 

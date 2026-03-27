@@ -23,7 +23,7 @@ const PORT = process.env.PORT || 5000;
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/ojt_dtr_tracker';
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '5mb' }));
 
 // Connect to MongoDB
 mongoose.connect(MONGODB_URI)
@@ -413,18 +413,26 @@ app.delete('/api/entries/:id', requireAuth, async (req, res) => {
 // Holidays
 app.get('/api/holidays', requireAuth, async (req, res) => {
   try {
-    const config = await Config.findOne({ userId: req.userId }).lean();
+    const [config, existingHolidays] = await Promise.all([
+      Config.findOne({ userId: req.userId }).lean(),
+      Holiday.find({ userId: req.userId }).sort({ date: 1 }).lean(),
+    ]);
+
+    let holidays = existingHolidays;
     try {
-      await syncPhilippinePublicHolidays({
+      const syncResult = await syncPhilippinePublicHolidays({
         userId: req.userId,
         years: getRequestedHolidaySyncYears(req, config),
         HolidayModel: Holiday,
+        existingHolidays,
       });
+      if (syncResult.changed) {
+        holidays = await Holiday.find({ userId: req.userId }).sort({ date: 1 }).lean();
+      }
     } catch (syncErr) {
       console.error('Philippine holiday sync error:', syncErr);
     }
 
-    const holidays = await Holiday.find({ userId: req.userId }).sort({ date: 1 }).lean();
     res.json(holidays);
   } catch (err) {
     console.error('Fetch holidays error:', err);
