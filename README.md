@@ -1,39 +1,38 @@
 # OJT DTR Tracker
 
-OJT DTR Tracker is a local-first daily time record system built for On-the-Job Training hour tracking. It includes a Vite frontend, an Express API, MongoDB persistence, PDF and Excel export, audit history, import preview, and a Windows launcher flow that starts the app with hidden background processes.
+OJT DTR Tracker is a local-first daily time record system for OJT hour tracking. The current system is a browser app served by Vite on the frontend, an Express API on the backend, and MongoDB for persistence, with PDF/Excel export, audit history, import preview, and Philippine holiday sync.
 
 ## What It Does
 
 - Tracks AM and PM time in/out entries
-- Computes rendered hours, overtime, late minutes, and undertime
+- Recalculates rendered hours, overtime, late minutes, and undertime on the server
 - Generates DTR views plus PDF and Excel exports
-- Shows attendance summaries, reports, and activity history
-- Supports holiday and leave tagging
-- Automatically syncs Philippine public holidays from a public API
-- Supports JSON export, previewed import, and restore from audit snapshots
-- Uses local MongoDB with replica-set support for safer transactional writes
+- Supports login/registration, config updates, audit history, and restore actions
+- Supports holiday records, public-holiday sync, JSON export, and import preview
+- Pushes live updates to the frontend through `/api/sync`
 
-## Stack
+## Runtime Architecture
 
-- Frontend: Vite, vanilla JavaScript, CSS
-- Backend: Express
+- Frontend: Vite + vanilla JavaScript on `http://localhost:5173`
+- Backend: Express API on port `5000`
 - Database: MongoDB via Mongoose
 - Export: `jspdf`, `jspdf-autotable`, `xlsx`
-- Runtime: Node.js
+- Runtime logs: `.runtime/server.log` and `.runtime/vite.log`
+- Runtime process state: `.runtime/tracker-pids.json`
 
 ## Project Layout
 
 ```text
 OJT DTR TRACKER
-├─ src/                    Frontend app, pages, store, styles, export helpers
+├─ src/                    Frontend app, pages, store, router, styles, export helpers
 ├─ server/                 Express API, models, tracker core logic, tests
-├─ scripts/                Windows PowerShell helpers for startup and MongoDB
-├─ mongo/                  Local MongoDB config for workspace replica-set setup
+├─ scripts/                Windows PowerShell and Node helpers for startup and MongoDB
+├─ mongo/                  Local MongoDB config for the optional workspace replica set
 ├─ public/                 Static assets and PWA files
 ├─ Start-Tracker.bat       Starts the app with hidden background services
-├─ Stop-Tracker.bat        Stops the tracker services and local MongoDB
-├─ LOCAL_SETUP.md          Local MongoDB replica-set setup notes
-└─ package.json            Frontend scripts and shared dependencies
+├─ Stop-Tracker.bat        Stops the tracker services and local MongoDB helper
+├─ package.json            Frontend scripts and shared dependencies
+└─ README.md               Main project documentation
 ```
 
 ## Requirements
@@ -41,10 +40,7 @@ OJT DTR TRACKER
 - Windows
 - Node.js
 - MongoDB installed locally
-  Expected binary path:
-  `C:\Program Files\MongoDB\Server\8.2\bin\mongod.exe`
-
-If your MongoDB installation lives elsewhere, update the path in `scripts/Start-LocalMongoReplicaSet.ps1`.
+- `mongod.exe` available at `C:\Program Files\MongoDB\Server\8.2\bin\mongod.exe`, or update `scripts/Start-LocalMongoReplicaSet.ps1`
 
 ## Install
 
@@ -52,9 +48,9 @@ If your MongoDB installation lives elsewhere, update the path in `scripts/Start-
 npm install
 ```
 
-## Run
+## Daily Use
 
-Recommended Windows flow:
+Recommended launcher flow:
 
 ```powershell
 .\Start-Tracker.bat
@@ -62,17 +58,18 @@ Recommended Windows flow:
 
 That launcher:
 
-- starts the workspace-local MongoDB replica set
-- starts the backend and Vite frontend in hidden background processes
-- opens the app in your default browser
+- starts the optional workspace-local Mongo helper on port `27018`
+- starts the backend on port `5000` if it is not already listening
+- starts the Vite frontend on port `5173` if it is not already listening
+- opens `http://localhost:5173`
 
-To stop everything:
+To stop everything started by the launcher:
 
 ```powershell
 .\Stop-Tracker.bat
 ```
 
-## Development
+## Direct Development Commands
 
 Run the frontend only:
 
@@ -92,50 +89,64 @@ Run tests:
 npm test
 ```
 
-## Local MongoDB Setup
-
-This project is configured to use a workspace-local MongoDB instance on `127.0.0.1:27018` so transaction support does not depend on editing the Windows MongoDB service.
-
-See `LOCAL_SETUP.md` for full setup details.
-
-Quick start:
+Run the backend manually:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\Start-LocalMongoReplicaSet.ps1
+cd .\server
+node .\server.js
 ```
+
+## MongoDB Connection Modes
+
+The backend reads `MONGODB_URI` from `server/.env` when present. If it is not set, the code falls back to:
+
+```text
+mongodb://localhost:27017/ojt_dtr_tracker
+```
+
+The bundled local Mongo helper started by `scripts/Start-LocalMongoReplicaSet.ps1` runs on `127.0.0.1:27018` with replica set `rs0`. That helper is useful when you want a workspace-local transaction-capable Mongo instance, but the backend will only use it if your local `server/.env` points `MONGODB_URI` to that replica-set URI.
+
+Example local replica-set URI:
+
+```text
+mongodb://127.0.0.1:27018/ojt_dtr_tracker?replicaSet=rs0
+```
+
+## Main API Areas
+
+- `/api/auth/register` and `/api/auth/login`
+- `/api/entries`
+- `/api/holidays`
+- `/api/config`
+- `/api/import/preview` and `/api/import`
+- `/api/audit`
+- `/api/sync`
 
 ## Main Scripts
 
 - `Start-Tracker.bat`: launches the app in the background
-- `Stop-Tracker.bat`: stops frontend, backend, and local MongoDB
+- `Stop-Tracker.bat`: stops frontend, backend, and the local Mongo helper
 - `scripts/Start-LocalMongoReplicaSet.ps1`: starts local MongoDB on port `27018`
-- `scripts/Stop-LocalMongoReplicaSet.ps1`: stops the local MongoDB process
-- `scripts/Start-TrackerServices.ps1`: hidden app startup helper
-- `scripts/Stop-TrackerServices.ps1`: hidden app shutdown helper
+- `scripts/Stop-LocalMongoReplicaSet.ps1`: stops the local MongoDB process on port `27018`
+- `scripts/Start-TrackerServices.ps1`: hidden startup helper for backend and frontend
+- `scripts/Stop-TrackerServices.ps1`: hidden shutdown helper for backend and frontend
+- `scripts/ensure-local-mongo-rs.mjs`: initializes or verifies replica set `rs0`
 
-## Features Added In This Version
+## Current Capabilities
 
 - Server-side validation and recalculation of entry totals
-- Import preview and safer bulk replace flow
+- Conflict detection and merge-aware stale update handling
+- Import preview before full replace
 - Audit trail with restore actions
-- Conflict detection for stale edits
-- Resource-scoped sync updates
-- Lazy-loaded heavy routes
-- Wider full-screen layout behavior
-- Hidden launcher flow for cleaner app startup
+- Philippine public-holiday synchronization
+- DTR printing plus PDF and Excel export
+- Reports, attendance summaries, and activity history
 
 ## Notes
 
 - This project is tuned for a local single-user workflow.
-- Runtime logs are written under `.runtime/`.
-- Local MongoDB data and generated build/runtime folders are ignored in Git.
-
-## Recommended Workflow
-
-1. Start the tracker with `Start-Tracker.bat`
-2. Use the app normally in the browser
-3. Export a JSON backup occasionally
-4. Stop the tracker with `Stop-Tracker.bat`
+- Generated folders such as `.runtime/`, `dist/`, `node_modules/`, and local Mongo data are not committed.
+- `server/.env` is intentionally local-only and not committed.
 
 ## License
 

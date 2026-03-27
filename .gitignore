@@ -21,3 +21,7 @@ Thumbs.db
 
 # Chat history
 chat_history/
+
+# Local-only docs and admin helpers
+LOCAL_SETUP.md
+scripts/Enable-MongoReplicaSet.ps1
