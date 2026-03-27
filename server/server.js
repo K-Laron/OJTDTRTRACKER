@@ -482,7 +482,7 @@ app.put('/api/holidays/:date', requireAuth, async (req, res) => {
       const holiday = await Holiday.findOneAndUpdate(
         { userId: req.userId, date: req.params.date },
         { ...sanitizedHoliday, userId: req.userId },
-        { new: true, upsert: true, session: session || undefined }
+        { returnDocument: 'after', upsert: true, session: session || undefined }
       );
       await writeAuditEvent({
         userId: req.userId,
@@ -558,7 +558,7 @@ app.put('/api/config', requireAuth, async (req, res) => {
       const config = await Config.findOneAndUpdate(
         { userId: req.userId },
         req.body,
-        { new: true, upsert: true, session: session || undefined }
+        { returnDocument: 'after', upsert: true, session: session || undefined }
       );
       await writeAuditEvent({
         userId: req.userId,
