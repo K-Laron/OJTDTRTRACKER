@@ -586,6 +586,129 @@ tr:hover td { background: rgba(255,255,255,0.02); }
 .cal-legend span { display: flex; align-items: center; gap: 6px; }
 .legend-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
 
+@media (min-width: 1025px) {
+  body:has(.calendar-page--desktop-fit) .main-content {
+    padding: 20px 24px;
+  }
+
+  .calendar-page--desktop-fit {
+    display: grid;
+    gap: 8px;
+    --calendar-desktop-cell-height: clamp(42px, calc((100dvh - 330px) / 6), 58px);
+  }
+
+  .calendar-page--desktop-fit .page-header {
+    margin-bottom: 0;
+    gap: 6px 12px;
+  }
+
+  .calendar-page--desktop-fit .page-actions {
+    gap: 6px;
+  }
+
+  .calendar-page--desktop-fit .page-actions .btn {
+    padding: 7px 12px;
+    font-size: 0.8rem;
+  }
+
+  .calendar-page--desktop-fit .mb-6 {
+    margin-bottom: 0;
+  }
+
+  .calendar-page--desktop-fit > .card,
+  .calendar-page--desktop-fit > .card-grid {
+    min-width: 0;
+  }
+
+  .calendar-page--desktop-fit > .card {
+    padding: 12px 14px;
+  }
+
+  .calendar-page--desktop-fit .calendar-intro-card {
+    padding-block: 10px;
+  }
+
+  .calendar-page--desktop-fit .calendar-summary-grid {
+    gap: 10px;
+  }
+
+  .calendar-page--desktop-fit .stat-card {
+    padding: 12px 14px;
+  }
+
+  .calendar-page--desktop-fit .stat-label,
+  .calendar-page--desktop-fit .stat-sub {
+    font-size: 0.66rem;
+  }
+
+  .calendar-page--desktop-fit .stat-value {
+    font-size: 1.2rem;
+    margin-top: 1px;
+  }
+
+  .calendar-page--desktop-fit .stat-sub {
+    display: none;
+  }
+
+  .calendar-page--desktop-fit .calendar-month-card {
+    padding: 10px;
+  }
+
+  .calendar-page--desktop-fit .calendar-grid {
+    gap: 2px;
+  }
+
+  .calendar-page--desktop-fit .cal-header {
+    padding: 2px;
+    font-size: 0.64rem;
+  }
+
+  .calendar-page--desktop-fit .cal-cell {
+    aspect-ratio: auto;
+    min-height: 0;
+    height: var(--calendar-desktop-cell-height);
+    padding: 4px 3px;
+    gap: 1px;
+  }
+
+  .calendar-page--desktop-fit .cal-num {
+    font-size: 0.85rem;
+  }
+
+  .calendar-page--desktop-fit .cal-label {
+    font-size: 0.48rem;
+    line-height: 1.05;
+  }
+
+  .calendar-page--desktop-fit .calendar-meta-card {
+    display: grid;
+    grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
+    gap: 10px;
+    align-items: start;
+  }
+
+  .calendar-page--desktop-fit .calendar-meta-card > .mt-4 {
+    margin-top: 0;
+  }
+
+  .calendar-page--desktop-fit .calendar-meta-card .table-wrap {
+    max-height: 108px;
+    overflow-y: auto;
+  }
+
+  .calendar-page--desktop-fit .calendar-meta-card th,
+  .calendar-page--desktop-fit .calendar-meta-card td {
+    padding: 8px 10px;
+    font-size: 0.76rem;
+  }
+
+  .calendar-page--desktop-fit .cal-legend {
+    gap: 8px 10px;
+    font-size: 0.72rem;
+    align-content: start;
+  }
+}
+
 /* ========== CHECKBOX & BULK ========== */
 .bulk-bar {
   display: flex;

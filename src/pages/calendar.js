@@ -145,7 +145,7 @@ export function render() {
   const monthHolidays = context.monthHolidays;
 
   return `
-    <div id="calendar-page">
+    <div id="calendar-page" class="calendar-page calendar-page--desktop-fit">
       <div class="page-header">
         <div><h2>Calendar</h2><p>${MONTHS[selMonth]} ${selYear}</p></div>
         <div class="page-actions">
@@ -156,18 +156,18 @@ export function render() {
         </div>
       </div>
 
-      <div class="card mb-6">
+      <div class="card calendar-intro-card mb-6">
         <p class="text-muted">Philippine public holidays are synced automatically from a public calendar API. Use Add Holiday/Leave only for extra manual dates.</p>
       </div>
 
-      <div class="card-grid card-grid-4 mb-6">
+      <div class="card-grid card-grid-4 calendar-summary-grid mb-6">
         <div class="stat-card primary"><div class="stat-label">Present</div><div class="stat-value">${summary.present}</div><div class="stat-sub">days this month</div></div>
         <div class="stat-card warning"><div class="stat-label">Late</div><div class="stat-value">${summary.late}</div><div class="stat-sub">days this month</div></div>
         <div class="stat-card info"><div class="stat-label">Holidays</div><div class="stat-value">${context.holidayCount}</div><div class="stat-sub">this month</div></div>
         <div class="stat-card accent"><div class="stat-label">On Leave</div><div class="stat-value">${context.leaveCount}</div><div class="stat-sub">this month</div></div>
       </div>
 
-      <div class="card mb-6">
+      <div class="card calendar-month-card mb-6">
         <div class="calendar-grid">
           <div class="cal-header">Sun</div><div class="cal-header">Mon</div><div class="cal-header">Tue</div>
           <div class="cal-header">Wed</div><div class="cal-header">Thu</div><div class="cal-header">Fri</div><div class="cal-header">Sat</div>
@@ -175,7 +175,7 @@ export function render() {
         </div>
       </div>
 
-      <div class="card">
+      <div class="card calendar-meta-card">
         <div class="cal-legend">
           <span><i class="legend-dot" style="background:var(--success)"></i> Present</span>
           <span><i class="legend-dot" style="background:var(--warning)"></i> Late</span>
