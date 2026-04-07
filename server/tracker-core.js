@@ -16,11 +16,19 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^\d{2}:\d{2}$/;
 const HOLIDAY_TYPES = new Set(['holiday', 'sick_leave', 'vacation_leave']);
 const HOLIDAY_SOURCES = new Set(['manual', 'public_api']);
-const ENTRY_EDITABLE_FIELDS = ['date', 'amTimeIn', 'amTimeOut', 'pmTimeIn', 'pmTimeOut', 'remarks', 'activities'];
+export const ENTRY_STATUSES = new Set(['present', 'leave', 'vacation', 'holiday', 'no_ojt', 'absent']);
+const ENTRY_EDITABLE_FIELDS = ['date', 'status', 'amTimeIn', 'amTimeOut', 'pmTimeIn', 'pmTimeOut', 'remarks', 'activities'];
 
 function toNumber(value, fallback) {
   const num = Number(value);
   return Number.isFinite(num) ? num : fallback;
+}
+
+function toLocalDateString(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 export function parseTime(value) {
@@ -65,6 +73,23 @@ export function calculateUndertime(timeOut, expected) {
 
 function normalizeText(value) {
   return value == null ? '' : String(value).trim();
+}
+
+function normalizeStatus(value, fallback = 'absent') {
+  const normalized = normalizeText(value).toLowerCase();
+  if (!normalized) return fallback;
+  if (!ENTRY_STATUSES.has(normalized)) {
+    throw new Error('Entry status is invalid');
+  }
+  return normalized;
+}
+
+function isPresentStatus(status) {
+  return status === 'present';
+}
+
+function isExcludedWorkdayStatus(status) {
+  return status === 'holiday' || status === 'leave' || status === 'vacation' || status === 'no_ojt';
 }
 
 function normalizeTime(value, label) {
@@ -142,6 +167,7 @@ export function sanitizeHoliday(input = {}) {
 function getComparableEntry(entry = {}) {
   return {
     date: entry.date || '',
+    status: entry.status || '',
     amTimeIn: entry.amTimeIn || '',
     amTimeOut: entry.amTimeOut || '',
     pmTimeIn: entry.pmTimeIn || '',
@@ -230,6 +256,7 @@ export function sanitizeEntry(input = {}, settings = DEFAULT_SETTINGS, { existin
   const base = existingEntry ? {
     id: existingEntry.id,
     date: existingEntry.date,
+    status: existingEntry.status,
     amTimeIn: existingEntry.amTimeIn,
     amTimeOut: existingEntry.amTimeOut,
     pmTimeIn: existingEntry.pmTimeIn,
@@ -246,12 +273,18 @@ export function sanitizeEntry(input = {}, settings = DEFAULT_SETTINGS, { existin
   }
 
   const date = assertDate(merged.date, 'Entry date');
-  const amTimeIn = normalizeTime(merged.amTimeIn, 'AM Time In');
-  const amTimeOut = normalizeTime(merged.amTimeOut, 'AM Time Out');
-  const pmTimeIn = normalizeTime(merged.pmTimeIn, 'PM Time In');
-  const pmTimeOut = normalizeTime(merged.pmTimeOut, 'PM Time Out');
+  const rawAmTimeIn = normalizeTime(merged.amTimeIn, 'AM Time In');
+  const rawAmTimeOut = normalizeTime(merged.amTimeOut, 'AM Time Out');
+  const rawPmTimeIn = normalizeTime(merged.pmTimeIn, 'PM Time In');
+  const rawPmTimeOut = normalizeTime(merged.pmTimeOut, 'PM Time Out');
+  const hasAnyTime = Boolean(rawAmTimeIn || rawAmTimeOut || rawPmTimeIn || rawPmTimeOut);
+  const status = normalizeStatus(merged.status, hasAnyTime ? 'present' : 'absent');
+  const amTimeIn = isPresentStatus(status) ? rawAmTimeIn : '';
+  const amTimeOut = isPresentStatus(status) ? rawAmTimeOut : '';
+  const pmTimeIn = isPresentStatus(status) ? rawPmTimeIn : '';
+  const pmTimeOut = isPresentStatus(status) ? rawPmTimeOut : '';
 
-  if (!amTimeIn && !pmTimeIn) {
+  if (isPresentStatus(status) && !amTimeIn && !pmTimeIn) {
     throw new Error('At least one time in is required');
   }
   if (amTimeIn && amTimeOut && parseTime(amTimeIn) >= parseTime(amTimeOut)) {
@@ -264,6 +297,7 @@ export function sanitizeEntry(input = {}, settings = DEFAULT_SETTINGS, { existin
   const entry = {
     id,
     date,
+    status,
     amTimeIn,
     amTimeOut,
     pmTimeIn,
@@ -274,14 +308,77 @@ export function sanitizeEntry(input = {}, settings = DEFAULT_SETTINGS, { existin
   };
 
   const effectiveSettings = normalizeSettings(settings);
-  const hoursRendered = calculateEntryHours(entry);
+  const hoursRendered = isPresentStatus(status) ? calculateEntryHours(entry) : 0;
 
   return {
     ...entry,
     hoursRendered,
-    overtimeHours: calculateOvertime(hoursRendered),
-    lateMinutes: amTimeIn ? calculateLate(amTimeIn, effectiveSettings.expectedTimeIn) : 0,
-    undertimeMinutes: pmTimeOut ? calculateUndertime(pmTimeOut, effectiveSettings.expectedTimeOut) : 0,
+    overtimeHours: isPresentStatus(status) ? calculateOvertime(hoursRendered) : 0,
+    lateMinutes: isPresentStatus(status) && amTimeIn ? calculateLate(amTimeIn, effectiveSettings.expectedTimeIn) : 0,
+    undertimeMinutes: isPresentStatus(status) && pmTimeOut ? calculateUndertime(pmTimeOut, effectiveSettings.expectedTimeOut) : 0,
+  };
+}
+
+export function calculateCompletionForecast({ today, requiredHours, entries = [] } = {}) {
+  const normalizedToday = assertDate(today || toLocalDateString(new Date()), 'Forecast date');
+  const presentEntries = entries
+    .map(entry => ({
+      ...entry,
+      status: normalizeStatus(entry?.status, (entry?.amTimeIn || entry?.pmTimeIn || entry?.hoursRendered) ? 'present' : 'absent'),
+      hoursRendered: Number(entry?.hoursRendered) || 0,
+    }))
+    .filter(entry => entry.status === 'present' && entry.hoursRendered > 0);
+
+  if (!presentEntries.length) return null;
+
+  const totalHours = presentEntries.reduce((sum, entry) => sum + entry.hoursRendered, 0);
+  const avgPerDay = totalHours / presentEntries.length;
+  if (avgPerDay <= 0) return null;
+
+  const remainingHours = Math.max(0, Number(requiredHours || 0) - totalHours);
+  if (remainingHours === 0) {
+    return {
+      avgPerDay,
+      remainingHours,
+      workingDaysRemaining: 0,
+      neededAvgHoursPerDay: 0,
+      estimatedDate: normalizedToday,
+      excludedDates: [],
+    };
+  }
+
+  const statusesByDate = new Map(entries.map(entry => [
+    entry.date,
+    normalizeStatus(entry?.status, (entry?.amTimeIn || entry?.pmTimeIn || entry?.hoursRendered) ? 'present' : 'absent'),
+  ]));
+  const workingDaysRemaining = Math.ceil(remainingHours / avgPerDay);
+  const excludedDates = [];
+  const cursor = new Date(`${normalizedToday}T00:00:00`);
+  let countedDays = 0;
+
+  while (countedDays < workingDaysRemaining) {
+    cursor.setDate(cursor.getDate() + 1);
+    const isoDate = toLocalDateString(cursor);
+    const day = cursor.getDay();
+    const status = statusesByDate.get(isoDate) || '';
+
+    if (day === 0 || day === 6) {
+      continue;
+    }
+    if (isExcludedWorkdayStatus(status)) {
+      excludedDates.push({ date: isoDate, status });
+      continue;
+    }
+    countedDays += 1;
+  }
+
+  return {
+    avgPerDay,
+    remainingHours,
+    workingDaysRemaining,
+    neededAvgHoursPerDay: remainingHours / workingDaysRemaining,
+    estimatedDate: toLocalDateString(cursor),
+    excludedDates,
   };
 }
 

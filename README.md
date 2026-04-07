@@ -5,6 +5,7 @@ OJT DTR Tracker is a local-first daily time record system for OJT hour tracking.
 ## What It Does
 
 - Tracks AM and PM time in/out entries
+- Tracks one day-level status per record: Present, Leave, Vacation, Holiday, No OJT, or Absent
 - Recalculates rendered hours, overtime, late minutes, and undertime on the server
 - Generates DTR views plus PDF and Excel exports
 - Supports login/registration, config updates, audit history, and restore actions
@@ -146,6 +147,14 @@ mongodb://127.0.0.1:27018/ojt_dtr_tracker?replicaSet=rs0
 - Philippine public-holiday synchronization with cached retry backoff when the public API is unavailable
 - DTR printing plus PDF and Excel export
 - Reports, attendance summaries, and activity history
+- Workday-aware completion forecasting that excludes future holidays, leave, vacation, and no-OJT dates
+- Activity templates, batch status updates, summary-pack reporting, and data-quality alerts
+
+## Day Status Rules
+
+- `Present` days keep AM/PM time entries and contribute rendered hours.
+- `Leave`, `Vacation`, `Holiday`, `No OJT`, and `Absent` days contribute `0` rendered hours.
+- Completion forecasts skip future weekdays that are marked as holidays, leave, vacation, or no-OJT days.
 
 ## Notes
 

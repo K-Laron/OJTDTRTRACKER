@@ -10,6 +10,11 @@ const entrySchema = new mongoose.Schema({
   userId: { type: String, required: true },
   id: { type: String, required: true, unique: true },
   date: { type: String, required: true },
+  status: {
+    type: String,
+    enum: ['present', 'leave', 'vacation', 'holiday', 'no_ojt', 'absent'],
+    default: 'present',
+  },
   amTimeIn: String,
   amTimeOut: String,
   pmTimeIn: String,
