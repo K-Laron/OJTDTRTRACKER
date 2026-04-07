@@ -19,6 +19,8 @@ function renderOverview() {
   const totalUT = store.getTotalUndertimeMinutes();
   const days = store.getDaysAttended();
   const avgHrs = days > 0 ? totalHrs / days : 0;
+  const statuses = store.getStatusSummary();
+  const alerts = store.getDataQualityAlerts();
 
   return `
     <div class="card-grid card-grid-3 mb-6">
@@ -34,6 +36,53 @@ function renderOverview() {
           <div class="detail-row"><span class="detail-label">Total Late</span><span class="detail-value text-danger">${fmtMinutes(totalLate)}</span></div>
           <div class="detail-row"><span class="detail-label">Total Undertime</span><span class="detail-value text-danger">${fmtMinutes(totalUT)}</span></div>
         </div>
+      </div>
+      <div class="card">
+        <div class="card-header"><h3>Status Summary</h3></div>
+        <div class="progress-details">
+          <div class="detail-row"><span class="detail-label">Present</span><span class="detail-value">${statuses.present}</span></div>
+          <div class="detail-row"><span class="detail-label">Leave / Vacation</span><span class="detail-value">${statuses.leave + statuses.vacation}</span></div>
+          <div class="detail-row"><span class="detail-label">Holiday</span><span class="detail-value">${statuses.holiday}</span></div>
+          <div class="detail-row"><span class="detail-label">No OJT / Absent</span><span class="detail-value">${statuses.no_ojt + statuses.absent}</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header"><h3>Data Quality</h3></div>
+      ${alerts.length ? `<div class="progress-details">${alerts.slice(0, 8).map(alert => `<div class="detail-row"><span class="detail-label">${fmtDate(alert.date)}</span><span class="detail-value">${alert.message}</span></div>`).join('')}</div>` : '<div class="empty-state"><h4>No current data-quality warnings</h4></div>'}
+    </div>
+  `;
+}
+
+function renderSummaryPack() {
+  const entries = store.getAllEntriesWithDerivedStatus();
+  const sorted = [...entries].sort((a, b) => a.date.localeCompare(b.date));
+  const dateFrom = sorted[0]?.date;
+  const dateTo = sorted[sorted.length - 1]?.date;
+  const pack = store.getSummaryPack({ dateFrom, dateTo });
+
+  return `
+    <div class="card mb-6">
+      <div class="card-header"><h3>Summary Pack</h3></div>
+      <div class="progress-details">
+        <div class="detail-row"><span class="detail-label">Range</span><span class="detail-value">${dateFrom ? `${fmtDate(dateFrom)} to ${fmtDate(dateTo)}` : '--'}</span></div>
+        <div class="detail-row"><span class="detail-label">Hours</span><span class="detail-value">${fmtHours(pack.totalHours)}</span></div>
+        <div class="detail-row"><span class="detail-label">Overtime</span><span class="detail-value">${fmtHours(pack.totalOvertime)}</span></div>
+        <div class="detail-row"><span class="detail-label">Late</span><span class="detail-value">${fmtMinutes(pack.totalLate)}</span></div>
+        <div class="detail-row"><span class="detail-label">Undertime</span><span class="detail-value">${fmtMinutes(pack.totalUndertime)}</span></div>
+        <div class="detail-row"><span class="detail-label">Narrative</span><span class="detail-value">${pack.narrative}</span></div>
+      </div>
+    </div>
+    <div class="card-grid card-grid-2 mb-6">
+      <div class="card">
+        <div class="card-header"><h3>Attendance By Status</h3></div>
+        <div class="progress-details">
+          ${Object.entries(pack.statuses).map(([status, count]) => `<div class="detail-row"><span class="detail-label">${store.formatStatusLabel(status)}</span><span class="detail-value">${count}</span></div>`).join('')}
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header"><h3>Activity Highlights</h3></div>
+        ${pack.highlights.length ? `<div class="progress-details">${pack.highlights.map(item => `<div class="detail-row"><span class="detail-label">${item.activity}</span><span class="detail-value">${item.count}</span></div>`).join('')}</div>` : '<div class="empty-state"><h4>No recurring activities yet</h4></div>'}
       </div>
     </div>
   `;
@@ -306,6 +355,7 @@ export function render() {
     { id: 'overview', label: 'Overview' },
     { id: 'monthly', label: 'Monthly' },
     { id: 'weekly', label: 'Weekly' },
+    { id: 'summary', label: 'Summary Pack' },
     { id: 'activity', label: 'Activity' },
   ];
 
@@ -313,6 +363,7 @@ export function render() {
   if (activeTab === 'overview') tabContent = renderOverview();
   else if (activeTab === 'monthly') tabContent = renderMonthly();
   else if (activeTab === 'weekly') tabContent = renderWeekly();
+  else if (activeTab === 'summary') tabContent = renderSummaryPack();
   else if (activeTab === 'activity') tabContent = renderActivity();
 
   return `

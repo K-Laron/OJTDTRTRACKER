@@ -105,9 +105,9 @@ function renderSheetContent() {
   const daysInMonth = getDaysInMonth(selYear, selMonth);
   const profile = store.state.profile;
   const scheduleText = `${fmtTimeStr(store.state.settings.expectedTimeIn)} - ${fmtTimeStr(store.state.settings.expectedTimeOut)}`;
-  const totalHours = entries.reduce((sum, entry) => sum + (entry.hoursRendered || 0), 0);
-  const totalOvertime = entries.reduce((sum, entry) => sum + (entry.overtimeHours || 0), 0);
-  const daysWorked = entries.reduce((count, entry) => count + ((entry.amTimeOut || entry.pmTimeOut) ? 1 : 0), 0);
+  const totalHours = entries.reduce((sum, entry) => sum + (((entry.status || 'present') === 'present') ? (entry.hoursRendered || 0) : 0), 0);
+  const totalOvertime = entries.reduce((sum, entry) => sum + (((entry.status || 'present') === 'present') ? (entry.overtimeHours || 0) : 0), 0);
+  const daysWorked = entries.reduce((count, entry) => count + ((((entry.status || 'present') === 'present') && (entry.amTimeOut || entry.pmTimeOut)) ? 1 : 0), 0);
 
   const rows = [];
   for (let day = 1; day <= daysInMonth; day++) {
@@ -116,7 +116,9 @@ function renderSheetContent() {
     const entry = entriesByDate.get(dateStr);
     const holiday = holidaysByDate.get(dateStr);
     const isWeekend = dayName === 'Sat' || dayName === 'Sun';
-    const holidayLabel = holiday ? holiday.type.replace('_', ' ').replace(/\b\w/g, char => char.toUpperCase()) : '';
+    const derivedStatus = entry?.status || (holiday ? (holiday.type === 'holiday' ? 'holiday' : holiday.type === 'vacation_leave' ? 'vacation' : 'leave') : '');
+    const holidayLabel = derivedStatus ? derivedStatus.replace('_', ' ').replace(/\b\w/g, char => char.toUpperCase()) : '';
+    const isPresent = !derivedStatus || derivedStatus === 'present';
     const activityText = entry?.activities || holiday?.name || '';
     const remarksText = entry?.remarks || holidayLabel || '';
 
@@ -124,12 +126,12 @@ function renderSheetContent() {
       <tr style="${isWeekend || holiday ? 'opacity:0.5' : ''}">
         <td>${day}</td>
         <td>${dayName}</td>
-        <td class="font-mono">${fmtTimeStr(entry?.amTimeIn)}</td>
-        <td class="font-mono">${fmtTimeStr(entry?.amTimeOut)}</td>
-        <td class="font-mono">${fmtTimeStr(entry?.pmTimeIn)}</td>
-        <td class="font-mono">${fmtTimeStr(entry?.pmTimeOut)}</td>
-        <td class="font-mono">${(entry?.amTimeOut || entry?.pmTimeOut) ? entry.hoursRendered.toFixed(2) : ''}</td>
-        <td class="font-mono">${entry?.overtimeHours > 0 ? entry.overtimeHours.toFixed(2) : ''}</td>
+        <td class="font-mono">${isPresent ? fmtTimeStr(entry?.amTimeIn) : ''}</td>
+        <td class="font-mono">${isPresent ? fmtTimeStr(entry?.amTimeOut) : ''}</td>
+        <td class="font-mono">${isPresent ? fmtTimeStr(entry?.pmTimeIn) : ''}</td>
+        <td class="font-mono">${isPresent ? fmtTimeStr(entry?.pmTimeOut) : ''}</td>
+        <td class="font-mono">${isPresent && (entry?.amTimeOut || entry?.pmTimeOut) ? entry.hoursRendered.toFixed(2) : ''}</td>
+        <td class="font-mono">${isPresent && entry?.overtimeHours > 0 ? entry.overtimeHours.toFixed(2) : ''}</td>
         <td style="font-size:0.8rem;color:var(--text-muted)">${activityText}</td>
         <td style="font-size:0.8rem;color:var(--text-muted)">${remarksText}</td>
       </tr>

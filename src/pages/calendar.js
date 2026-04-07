@@ -20,13 +20,7 @@ async function ensureVisibleYearHolidays(force = false) {
 function getCalendarContext() {
   const entries = store.getEntriesByMonth(selYear, selMonth);
   const monthHolidays = store.getHolidaysInMonth(selYear, selMonth);
-  let holidayCount = 0;
-  let leaveCount = 0;
-
-  monthHolidays.forEach(holiday => {
-    if (holiday.type === 'holiday') holidayCount++;
-    else leaveCount++;
-  });
+  const statusSummary = store.getStatusSummary(selYear, selMonth);
 
   return {
     today: getCurrentDate(),
@@ -34,23 +28,24 @@ function getCalendarContext() {
     entriesByDate: new Map(entries.map(entry => [entry.date, entry])),
     holidaysByDate: new Map(monthHolidays.map(holiday => [holiday.date, holiday])),
     monthHolidays,
-    holidayCount,
-    leaveCount,
+    statusSummary,
   };
 }
 
 function getDayStatus(dateStr, context) {
-  const entry = context.entriesByDate.get(dateStr) || null;
-  const holiday = context.holidaysByDate.get(dateStr) || null;
+  const entry = store.getEntryOrStatusByDate(dateStr);
   const dayName = getDayName(dateStr);
   const isWeekend = dayName === 'Sat' || dayName === 'Sun';
 
-  if (holiday) return { cls: `cal-${holiday.type === 'holiday' ? 'holiday' : 'leave'}`, label: holiday.name, entry, holiday };
-  if (entry && (entry.amTimeOut || entry.pmTimeOut)) {
+  if (entry?.status === 'holiday') return { cls: 'cal-holiday', label: entry.remarks || 'Holiday', entry, holiday: null };
+  if (entry?.status === 'leave' || entry?.status === 'vacation') return { cls: 'cal-leave', label: store.formatStatusLabel(entry.status), entry, holiday: null };
+  if (entry?.status === 'no_ojt') return { cls: 'cal-weekend', label: 'No OJT', entry, holiday: null };
+  if (entry?.status === 'present' && (entry.amTimeOut || entry.pmTimeOut)) {
     const isLate = (entry.lateMinutes || 0) > 0;
     return { cls: isLate ? 'cal-late' : 'cal-present', label: fmtHours(entry.hoursRendered), entry, holiday: null };
   }
-  if (entry) return { cls: 'cal-active', label: 'In progress', entry, holiday: null };
+  if (entry?.status === 'present') return { cls: 'cal-active', label: 'In progress', entry, holiday: null };
+  if (entry?.status === 'absent') return { cls: 'cal-absent', label: '', entry, holiday: null };
   if (isWeekend) return { cls: 'cal-weekend', label: '', entry: null, holiday: null };
   // Weekday, no entry — check if in the past
   if (context.startDate && dateStr < context.startDate) return { cls: '', label: '', entry: null, holiday: null };
@@ -66,19 +61,21 @@ function getRoot(container = document) {
 }
 
 function showDayDetails(date) {
-  const entry = store.getEntryByDate(date);
-  const holiday = store.isHoliday(date);
+  const entry = store.getEntryOrStatusByDate(date);
   let body = `<p style="margin-bottom:12px"><strong>${fmtDate(date)}</strong> (${getDayName(date)})</p>`;
-  if (holiday) body += `<p>📅 <strong>${holiday.name}</strong> — ${holiday.type.replace('_',' ')}</p>`;
+  if (entry?.status && entry.status !== 'present') {
+    body += `<p><strong>Status:</strong> ${store.formatStatusLabel(entry.status)}</p>`;
+  }
   if (entry) {
     body += `<table style="width:100%;margin-top:12px">
+      <tr><td class="text-muted">Status</td><td>${store.formatStatusLabel(entry.status)}</td></tr>
       <tr><td class="text-muted">AM</td><td class="font-mono">${fmtTimeStr(entry.amTimeIn)} – ${fmtTimeStr(entry.amTimeOut)}</td></tr>
       <tr><td class="text-muted">PM</td><td class="font-mono">${fmtTimeStr(entry.pmTimeIn)} – ${fmtTimeStr(entry.pmTimeOut)}</td></tr>
       <tr><td class="text-muted">Hours</td><td>${fmtHours(entry.hoursRendered)}</td></tr>
       ${entry.activities ? `<tr><td class="text-muted">Activities</td><td>${entry.activities}</td></tr>` : ''}
     </table>`;
   }
-  if (!entry && !holiday) body += '<p class="text-muted">No record for this day.</p>';
+  if (!entry) body += '<p class="text-muted">No record for this day.</p>';
   openModal(`<div class="modal-header"><h3>Day Details</h3><button class="btn-icon" onclick="document.querySelector('.modal-overlay')?.remove()">${ICONS.x}</button></div><div class="modal-body">${body}</div>`);
 }
 
@@ -163,8 +160,8 @@ export function render() {
       <div class="card-grid card-grid-4 calendar-summary-grid mb-6">
         <div class="stat-card primary"><div class="stat-label">Present</div><div class="stat-value">${summary.present}</div><div class="stat-sub">days this month</div></div>
         <div class="stat-card warning"><div class="stat-label">Late</div><div class="stat-value">${summary.late}</div><div class="stat-sub">days this month</div></div>
-        <div class="stat-card info"><div class="stat-label">Holidays</div><div class="stat-value">${context.holidayCount}</div><div class="stat-sub">this month</div></div>
-        <div class="stat-card accent"><div class="stat-label">On Leave</div><div class="stat-value">${context.leaveCount}</div><div class="stat-sub">this month</div></div>
+        <div class="stat-card info"><div class="stat-label">Holidays</div><div class="stat-value">${context.statusSummary.holiday}</div><div class="stat-sub">this month</div></div>
+        <div class="stat-card accent"><div class="stat-label">On Leave</div><div class="stat-value">${context.statusSummary.leave + context.statusSummary.vacation + context.statusSummary.no_ojt}</div><div class="stat-sub">this month</div></div>
       </div>
 
       <div class="card calendar-month-card mb-6">

@@ -32,6 +32,7 @@ let visibleEntriesError = '';
 let visibleEntriesRequestId = 0;
 let availableMonthsCache = [];
 let availableMonthsVersion = -1;
+let selectedDates = new Set();
 
 function getMostCommonTime(field) {
   const entries = store.getAllEntries().slice(0, 5);
@@ -52,6 +53,7 @@ function getMostCommonTime(field) {
 
 function entryForm(entry = null) {
   const isEdit = Boolean(entry);
+  const status = entry?.status || (entry?.amTimeIn || entry?.pmTimeIn ? 'present' : 'absent');
   const defAmIn = isEdit ? (entry.amTimeIn || '') : getMostCommonTime('amTimeIn');
   const defAmOut = isEdit ? (entry.amTimeOut || '') : getMostCommonTime('amTimeOut');
   const defPmIn = isEdit ? (entry.pmTimeIn || '') : getMostCommonTime('pmTimeIn');
@@ -60,6 +62,17 @@ function entryForm(entry = null) {
   return `
     <div class="modal-header"><h3>${isEdit ? 'Edit' : 'Add'} Entry</h3><button class="btn-icon modal-close-btn">${ICONS.x}</button></div>
     <div class="modal-body">
+      <div class="form-group">
+        <label>Status</label>
+        <select id="entry-status">
+          <option value="present" ${status === 'present' ? 'selected' : ''}>Present</option>
+          <option value="leave" ${status === 'leave' ? 'selected' : ''}>Leave</option>
+          <option value="vacation" ${status === 'vacation' ? 'selected' : ''}>Vacation</option>
+          <option value="holiday" ${status === 'holiday' ? 'selected' : ''}>Holiday</option>
+          <option value="no_ojt" ${status === 'no_ojt' ? 'selected' : ''}>No OJT</option>
+          <option value="absent" ${status === 'absent' ? 'selected' : ''}>Absent</option>
+        </select>
+      </div>
       <div class="form-group"><label>Date</label><input type="date" id="entry-date" value="${entry?.date || getCurrentDate()}"></div>
       <div style="display:flex;gap:16px;align-items:center;margin:16px 0 8px"><span style="font-weight:700;font-size:0.9rem;color:var(--primary)">Morning (AM)</span><hr style="flex:1;border:none;border-top:1px solid var(--border)"></div>
       <div class="form-row">
@@ -132,7 +145,73 @@ function openEntryEditor(entry) {
   document.querySelector('.modal-cancel-btn').onclick = closeModal;
 }
 
+function toggleSelectedDate(date, checked) {
+  if (checked) selectedDates.add(date);
+  else selectedDates.delete(date);
+}
+
+function clearSelectedDates() {
+  selectedDates = new Set();
+}
+
+function getSelectedDates() {
+  return [...selectedDates].sort();
+}
+
+function openTemplateManager() {
+  const templates = store.getActivityTemplates();
+  openModal(`
+    <div class="modal-header"><h3>Activity Templates</h3><button class="btn-icon modal-close-btn">${ICONS.x}</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label>Template Name</label><input type="text" id="template-name" placeholder="e.g. Documentation"></div>
+      <div class="form-group"><label>Activities</label><textarea id="template-activities" placeholder="Template activities"></textarea></div>
+      <div class="form-group"><label>Remarks</label><input type="text" id="template-remarks" placeholder="Optional remarks"></div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table>
+          <thead><tr><th>Name</th><th>Activities</th><th>Remarks</th><th>Actions</th></tr></thead>
+          <tbody>
+            ${templates.map(template => `<tr>
+              <td>${template.name}</td>
+              <td>${template.activities}</td>
+              <td>${template.remarks || '--'}</td>
+              <td><button class="btn-icon btn-template-delete" data-id="${template.id}" title="Delete">${ICONS.trash}</button></td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost modal-cancel-btn">Close</button>
+      <button class="btn btn-primary" id="template-save">Save Template</button>
+    </div>
+  `);
+  document.querySelector('.modal-close-btn').onclick = closeModal;
+  document.querySelector('.modal-cancel-btn').onclick = closeModal;
+  document.getElementById('template-save').onclick = () => {
+    const name = document.getElementById('template-name').value.trim();
+    const activities = document.getElementById('template-activities').value.trim();
+    const remarks = document.getElementById('template-remarks').value.trim();
+    if (!name || !activities) {
+      toast('Template name and activities are required', 'error');
+      return;
+    }
+    store.saveActivityTemplate({ name, activities, remarks });
+    toast('Template saved', 'success');
+    closeModal();
+    openTemplateManager();
+  };
+  document.querySelectorAll('.btn-template-delete').forEach(btn => {
+    btn.addEventListener('click', () => {
+      store.deleteActivityTemplate(btn.dataset.id);
+      toast('Template deleted', 'info');
+      closeModal();
+      openTemplateManager();
+    });
+  });
+}
+
 async function saveEntry(id = null) {
+  const status = document.getElementById('entry-status').value;
   const date = document.getElementById('entry-date').value;
   const amIn = document.getElementById('entry-am-in').value;
   const amOut = document.getElementById('entry-am-out').value;
@@ -141,38 +220,40 @@ async function saveEntry(id = null) {
   const remarks = document.getElementById('entry-remarks').value;
   const activities = document.getElementById('entry-activities').value;
   const settings = store.state.settings;
+  const isPresent = status === 'present';
 
   if (!date) {
     toast('Date is required', 'error');
     return;
   }
-  if (!amIn && !pmIn) {
+  if (isPresent && !amIn && !pmIn) {
     toast('At least one time in is required', 'error');
     return;
   }
-  if (amIn && amOut && amIn >= amOut) {
+  if (isPresent && amIn && amOut && amIn >= amOut) {
     toast('AM Out must be after AM In', 'error');
     return;
   }
-  if (pmIn && pmOut && pmIn >= pmOut) {
+  if (isPresent && pmIn && pmOut && pmIn >= pmOut) {
     toast('PM Out must be after PM In', 'error');
     return;
   }
 
   const entry = {
     date,
-    amTimeIn: amIn,
-    amTimeOut: amOut,
-    pmTimeIn: pmIn,
-    pmTimeOut: pmOut,
+    status,
+    amTimeIn: isPresent ? amIn : '',
+    amTimeOut: isPresent ? amOut : '',
+    pmTimeIn: isPresent ? pmIn : '',
+    pmTimeOut: isPresent ? pmOut : '',
     remarks,
     activities,
   };
-  const hoursRendered = calculateEntryHours(entry);
+  const hoursRendered = isPresent ? calculateEntryHours(entry) : 0;
   entry.hoursRendered = hoursRendered;
-  entry.overtimeHours = calculateOvertime(hoursRendered);
-  entry.lateMinutes = amIn ? calculateLate(amIn, settings.expectedTimeIn) : 0;
-  entry.undertimeMinutes = pmOut ? calculateUndertime(pmOut, settings.expectedTimeOut) : 0;
+  entry.overtimeHours = isPresent ? calculateOvertime(hoursRendered) : 0;
+  entry.lateMinutes = isPresent && amIn ? calculateLate(amIn, settings.expectedTimeIn) : 0;
+  entry.undertimeMinutes = isPresent && pmOut ? calculateUndertime(pmOut, settings.expectedTimeOut) : 0;
 
   try {
     if (id) {
@@ -347,17 +428,32 @@ function renderTableSection() {
 
   return `
     ${statusMessage}
+    <div class="page-actions no-print" style="margin:0 0 12px 0;justify-content:space-between">
+      <div class="text-muted" style="align-self:center">${getSelectedDates().length} selected</div>
+      <div class="table-actions">
+        <button class="btn btn-secondary" id="btn-template-manager">Templates</button>
+        <button class="btn btn-secondary" id="btn-reuse-prev" ${getSelectedDates().length === 1 ? '' : 'disabled'}>Reuse Previous Day</button>
+        <button class="btn btn-secondary" id="btn-apply-template" ${getSelectedDates().length ? '' : 'disabled'}>Apply Template</button>
+        <button class="btn btn-secondary" id="btn-mark-leave" ${getSelectedDates().length ? '' : 'disabled'}>Mark Leave</button>
+        <button class="btn btn-secondary" id="btn-mark-vacation" ${getSelectedDates().length ? '' : 'disabled'}>Mark Vacation</button>
+        <button class="btn btn-secondary" id="btn-mark-no-ojt" ${getSelectedDates().length ? '' : 'disabled'}>Mark No OJT</button>
+        <button class="btn btn-secondary" id="btn-mark-present" ${getSelectedDates().length ? '' : 'disabled'}>Mark Present</button>
+        <button class="btn btn-ghost" id="btn-clear-selection" ${getSelectedDates().length ? '' : 'disabled'}>Clear Selection</button>
+      </div>
+    </div>
     <div class="table-wrap"><table><thead><tr>
-      <th>Date</th><th>Day</th><th>AM In</th><th>AM Out</th><th>PM In</th><th>PM Out</th>
+      <th>Select</th><th>Date</th><th>Day</th><th>Status</th><th>AM In</th><th>AM Out</th><th>PM In</th><th>PM Out</th>
       <th>Hours</th><th>OT</th><th>Late</th><th>Actions</th>
     </tr></thead><tbody>
       ${items.map(entry => `<tr>
+        <td><input type="checkbox" class="row-select" data-date="${entry.date}" ${selectedDates.has(entry.date) ? 'checked' : ''}></td>
         <td>${fmtDate(entry.date)}</td><td>${getDayName(entry.date)}</td>
+        <td>${store.formatStatusLabel(store.getEntryStatus(entry))}</td>
         <td class="font-mono">${fmtTimeStr(entry.amTimeIn)}</td><td class="font-mono">${fmtTimeStr(entry.amTimeOut)}</td>
         <td class="font-mono">${fmtTimeStr(entry.pmTimeIn)}</td><td class="font-mono">${fmtTimeStr(entry.pmTimeOut)}</td>
-        <td class="font-mono">${(entry.amTimeOut || entry.pmTimeOut) ? fmtHours(entry.hoursRendered) : '--'}</td>
-        <td class="font-mono">${entry.overtimeHours > 0 ? fmtHours(entry.overtimeHours) : '--'}</td>
-        <td class="font-mono">${entry.lateMinutes > 0 ? fmtMinutes(entry.lateMinutes) : '--'}</td>
+        <td class="font-mono">${store.getEntryStatus(entry) === 'present' && (entry.amTimeOut || entry.pmTimeOut) ? fmtHours(entry.hoursRendered) : '--'}</td>
+        <td class="font-mono">${store.getEntryStatus(entry) === 'present' && entry.overtimeHours > 0 ? fmtHours(entry.overtimeHours) : '--'}</td>
+        <td class="font-mono">${store.getEntryStatus(entry) === 'present' && entry.lateMinutes > 0 ? fmtMinutes(entry.lateMinutes) : '--'}</td>
         <td><div class="table-actions">
           <button class="btn-icon btn-edit" data-id="${entry.id}" title="Edit">${ICONS.edit}</button>
           <button class="btn-icon btn-delete" data-id="${entry.id}" title="Delete">${ICONS.trash}</button>
@@ -407,6 +503,11 @@ function bindTimelogEvents(root) {
       return;
     }
 
+    if (target.closest('#btn-template-manager') || target.closest('#btn-template-manager-header')) {
+      openTemplateManager();
+      return;
+    }
+
     const editButton = target.closest('.btn-edit');
     if (editButton) {
       const entry = store.getEntry(editButton.dataset.id);
@@ -447,17 +548,98 @@ function bindTimelogEvents(root) {
       invalidateVisibleEntries();
       refreshTimelog(root);
       void loadVisibleEntries(true);
+      return;
+    }
+
+    if (target.closest('#btn-clear-selection')) {
+      clearSelectedDates();
+      refreshTimelog(root);
+      return;
+    }
+
+    if (target.closest('#btn-reuse-prev')) {
+      const dates = getSelectedDates();
+      if (dates.length !== 1) return;
+      store.reusePreviousWorkingDay(dates[0], { overwrite: false })
+        .then(() => {
+          toast('Previous working day reused', 'success');
+          clearSelectedDates();
+          refreshTimelog(root);
+        })
+        .catch(err => toast(err.message || 'Failed to reuse previous day', 'error'));
+      return;
+    }
+
+    if (target.closest('#btn-apply-template')) {
+      const dates = getSelectedDates();
+      const templates = store.getActivityTemplates();
+      if (!dates.length || !templates.length) return;
+      openModal(`
+        <div class="modal-header"><h3>Apply Template</h3><button class="btn-icon modal-close-btn">${ICONS.x}</button></div>
+        <div class="modal-body">
+          <div class="form-group"><label>Template</label>
+            <select id="apply-template-id">${templates.map(template => `<option value="${template.id}">${template.name}</option>`).join('')}</select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost modal-cancel-btn">Cancel</button>
+          <button class="btn btn-primary" id="apply-template-save">Apply</button>
+        </div>
+      `);
+      document.querySelector('.modal-close-btn').onclick = closeModal;
+      document.querySelector('.modal-cancel-btn').onclick = closeModal;
+      document.getElementById('apply-template-save').onclick = () => {
+        const templateId = document.getElementById('apply-template-id').value;
+        store.applyTemplateToDates(templateId, dates, { overwrite: false })
+          .then(() => {
+            closeModal();
+            clearSelectedDates();
+            toast('Template applied', 'success');
+            refreshTimelog(root);
+          })
+          .catch(err => toast(err.message || 'Failed to apply template', 'error'));
+      };
+      return;
+    }
+
+    const statusAction = target.closest('#btn-mark-leave, #btn-mark-vacation, #btn-mark-no-ojt, #btn-mark-present');
+    if (statusAction) {
+      const dates = getSelectedDates();
+      if (!dates.length) return;
+      const status = statusAction.id === 'btn-mark-leave'
+        ? 'leave'
+        : statusAction.id === 'btn-mark-vacation'
+          ? 'vacation'
+          : statusAction.id === 'btn-mark-no-ojt'
+            ? 'no_ojt'
+            : 'present';
+      store.batchUpdateStatuses(dates, status, { overwrite: true })
+        .then(() => {
+          clearSelectedDates();
+          toast(`Marked ${dates.length} date(s) as ${store.formatStatusLabel(status)}`, 'success');
+          refreshTimelog(root);
+        })
+        .catch(err => toast(err.message || 'Failed to update statuses', 'error'));
     }
   });
 
   root.addEventListener('change', event => {
-    const target = event.target instanceof HTMLSelectElement ? event.target : null;
-    if (!target || target.id !== 'filter-month') return;
-    filterMonth = target.value;
-    currentPage = 1;
-    invalidateVisibleEntries();
-    refreshTimelog(root);
-    void loadVisibleEntries(true);
+    const element = event.target instanceof Element ? event.target : null;
+    if (!element) return;
+
+    if (element instanceof HTMLSelectElement && element.id === 'filter-month') {
+      filterMonth = element.value;
+      currentPage = 1;
+      invalidateVisibleEntries();
+      refreshTimelog(root);
+      void loadVisibleEntries(true);
+      return;
+    }
+
+    if (element instanceof HTMLInputElement && element.classList.contains('row-select')) {
+      toggleSelectedDate(element.dataset.date, element.checked);
+      refreshTimelog(root);
+    }
   });
 }
 
@@ -466,7 +648,10 @@ export function render() {
     <div id="timelog-page">
       <div class="page-header">
         <div><h2>Time Log</h2><p>Manage your daily time records</p></div>
-        <div class="page-actions"><button class="btn btn-primary" id="btn-add-entry">${ICONS.plus} Add Entry</button></div>
+        <div class="page-actions">
+          <button class="btn btn-secondary" id="btn-template-manager-header">Templates</button>
+          <button class="btn btn-primary" id="btn-add-entry">${ICONS.plus} Add Entry</button>
+        </div>
       </div>
       <div class="filter-bar no-print">
         <span class="filter-label">${ICONS.filter} Filter:</span>

@@ -22,6 +22,13 @@ const DEFAULT_STATE = {
 };
 
 const API_BASE = '/api';
+const ENTRY_STATUSES = new Set(['present', 'leave', 'vacation', 'holiday', 'no_ojt', 'absent']);
+const NON_WORKING_STATUSES = new Set(['leave', 'vacation', 'holiday', 'no_ojt', 'absent']);
+const DEFAULT_ACTIVITY_TEMPLATES = [
+  { id: 'template-documentation', name: 'Documentation', activities: 'Updated documentation and organized work output.', remarks: '' },
+  { id: 'template-testing', name: 'Testing', activities: 'Tested implemented features and validated expected behavior.', remarks: '' },
+  { id: 'template-development', name: 'Development', activities: 'Implemented assigned tasks and reviewed related code changes.', remarks: '' },
+];
 
 function toLocalDateString(date = new Date()) {
   const year = date.getFullYear();
@@ -39,6 +46,27 @@ function getWeekStartKey(dateString) {
   const weekStart = new Date(date);
   weekStart.setDate(date.getDate() - date.getDay());
   return toLocalDateString(weekStart);
+}
+
+function normalizeEntryStatus(entry = {}) {
+  const normalized = String(entry.status || '').trim().toLowerCase();
+  if (ENTRY_STATUSES.has(normalized)) return normalized;
+  if (entry.amTimeIn || entry.amTimeOut || entry.pmTimeIn || entry.pmTimeOut || Number(entry.hoursRendered) > 0) {
+    return 'present';
+  }
+  return 'absent';
+}
+
+function formatStatusLabel(status) {
+  return String(status || 'absent')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function isWeekday(dateString) {
+  const date = new Date(`${dateString}T00:00:00`);
+  const day = date.getDay();
+  return day !== 0 && day !== 6;
 }
 
 class Store {
@@ -448,6 +476,8 @@ class Store {
 
 
   getEntry(id) { return this.state.entries.find(e => e.id === id) || null; }
+  getEntryStatus(entry) { return normalizeEntryStatus(entry); }
+  formatStatusLabel(status) { return formatStatusLabel(status); }
 
   _getEntryDateMap() {
     const entriesVersion = this.getResourceVersion('entries');
@@ -506,6 +536,31 @@ class Store {
     return this._getEntryDateMap().get(date) || null;
   }
 
+  getEntryOrStatusByDate(date) {
+    const entry = this.getEntryByDate(date);
+    if (entry) return { ...entry, status: normalizeEntryStatus(entry), source: 'entry' };
+
+    const holiday = this.isHoliday(date);
+    if (!holiday) return null;
+
+    return {
+      id: `status-${date}`,
+      date,
+      status: holiday.type === 'holiday' ? 'holiday' : holiday.type === 'vacation_leave' ? 'vacation' : 'leave',
+      amTimeIn: '',
+      amTimeOut: '',
+      pmTimeIn: '',
+      pmTimeOut: '',
+      hoursRendered: 0,
+      overtimeHours: 0,
+      lateMinutes: 0,
+      undertimeMinutes: 0,
+      remarks: holiday.name || '',
+      activities: '',
+      source: 'holiday',
+    };
+  }
+
   getActiveEntry() {
     return this.state.entries.find(e =>
       (e.amTimeIn && !e.amTimeOut) || (e.pmTimeIn && !e.pmTimeOut)
@@ -544,6 +599,10 @@ class Store {
       this.sortedEntriesCacheVersion = entriesVersion;
     }
     return this.sortedEntriesCache;
+  }
+
+  getAllEntriesWithDerivedStatus() {
+    return this.getAllEntries().map(entry => ({ ...entry, status: normalizeEntryStatus(entry) }));
   }
 
   async fetchEntries({ dateFrom, dateTo, page, limit } = {}) {
@@ -778,6 +837,9 @@ class Store {
     };
 
     for (const entry of this.state.entries) {
+      const status = normalizeEntryStatus(entry);
+      if (status !== 'present') continue;
+
       stats.totalHours += parseFloat(entry.hoursRendered) || 0;
       stats.totalOvertime += parseFloat(entry.overtimeHours) || 0;
       stats.totalLateMinutes += parseInt(entry.lateMinutes) || 0;
@@ -804,39 +866,124 @@ class Store {
   getMonthlyTrendData() { return this._getTrendData().monthly; }
   getWeeklyTrendData() { return this._getTrendData().weekly; }
 
+  getStatusSummary(year, month) {
+    const summary = {
+      present: 0,
+      leave: 0,
+      vacation: 0,
+      holiday: 0,
+      no_ojt: 0,
+      absent: 0,
+    };
+
+    const entries = year != null ? this.getEntriesByMonth(year, month) : this.state.entries;
+    entries.forEach(entry => {
+      const status = normalizeEntryStatus(entry);
+      if (Object.hasOwn(summary, status)) summary[status] += 1;
+    });
+
+    const holidays = year != null ? this.getHolidaysInMonth(year, month) : this.state.holidays;
+    holidays.forEach(holiday => {
+      if (this.getEntryByDate(holiday.date)) return;
+      if (holiday.type === 'holiday') summary.holiday += 1;
+      else if (holiday.type === 'vacation_leave') summary.vacation += 1;
+      else summary.leave += 1;
+    });
+
+    return summary;
+  }
+
   getAttendanceSummary(year, month) {
     const entries = year != null ? this.getEntriesByMonth(year, month) : this.state.entries;
-    const holidays = year != null ? this.getHolidaysInMonth(year, month) : this.state.holidays;
-    let present = 0, late = 0, onLeave = 0;
-    const entryDates = new Set();
+    const statusSummary = this.getStatusSummary(year, month);
+    let present = 0, late = 0;
     entries.forEach(e => {
-      if (e.amTimeOut || e.pmTimeOut) { present++; entryDates.add(e.date); }
-      if (e.lateMinutes > 0) late++;
+      const status = normalizeEntryStatus(e);
+      if (status === 'present' && (e.amTimeOut || e.pmTimeOut)) present++;
+      if (status === 'present' && e.lateMinutes > 0) late++;
     });
-    let holidayCount = 0;
-    holidays.forEach(h => {
-      if (h.type === 'holiday') holidayCount++;
-      else onLeave++;
-    });
-    return { present, late, onLeave, holidays: holidayCount };
+    return {
+      present,
+      late,
+      onLeave: statusSummary.leave + statusSummary.vacation + statusSummary.no_ojt,
+      holidays: statusSummary.holiday,
+    };
   }
 
   getCompletionEstimate() {
-    const days = this.getDaysAttended();
-    if (days === 0) return null;
-    const avgPerDay = this.getTotalHours() / days;
+    const forecast = this.getCompletionForecast();
+    if (!forecast) return null;
+    return {
+      avgPerDay: forecast.avgPerDay,
+      daysNeeded: forecast.workingDaysRemaining,
+      estimatedDate: forecast.estimatedDate,
+      remainingHours: forecast.remainingHours,
+      neededAvgHoursPerDay: forecast.neededAvgHoursPerDay,
+      excludedDates: forecast.excludedDates,
+    };
+  }
+
+  getCompletionForecast(today = toLocalDateString(new Date())) {
+    const presentEntries = this.state.entries
+      .map(entry => ({ ...entry, status: normalizeEntryStatus(entry) }))
+      .filter(entry => entry.status === 'present' && (parseFloat(entry.hoursRendered) || 0) > 0);
+
+    if (!presentEntries.length) return null;
+
+    const totalHours = presentEntries.reduce((sum, entry) => sum + (parseFloat(entry.hoursRendered) || 0), 0);
+    const avgPerDay = totalHours / presentEntries.length;
     if (avgPerDay <= 0) return null;
-    const remaining = this.getRemainingHours();
-    const daysNeeded = Math.ceil(remaining / avgPerDay);
-    // Skip weekends in estimate
-    let estDate = new Date();
-    let count = 0;
-    while (count < daysNeeded) {
-      estDate.setDate(estDate.getDate() + 1);
-      const day = estDate.getDay();
-      if (day !== 0 && day !== 6) count++;
+
+    const remainingHours = Math.max(0, this.getRequiredHours() - totalHours);
+    if (remainingHours === 0) {
+      return {
+        avgPerDay,
+        remainingHours,
+        workingDaysRemaining: 0,
+        neededAvgHoursPerDay: 0,
+        estimatedDate: today,
+        excludedDates: [],
+      };
     }
-    return { avgPerDay, daysNeeded, estimatedDate: toLocalDateString(estDate) };
+
+    const statusByDate = new Map();
+    this.state.entries.forEach(entry => {
+      statusByDate.set(entry.date, normalizeEntryStatus(entry));
+    });
+    this.state.holidays.forEach(holiday => {
+      if (statusByDate.has(holiday.date)) return;
+      statusByDate.set(
+        holiday.date,
+        holiday.type === 'holiday' ? 'holiday' : holiday.type === 'vacation_leave' ? 'vacation' : 'leave'
+      );
+    });
+
+    const workingDaysRemaining = Math.ceil(remainingHours / avgPerDay);
+    const excludedDates = [];
+    const cursor = new Date(`${today}T00:00:00`);
+    let countedDays = 0;
+
+    while (countedDays < workingDaysRemaining) {
+      cursor.setDate(cursor.getDate() + 1);
+      const dateKey = toLocalDateString(cursor);
+      const status = statusByDate.get(dateKey);
+
+      if (!isWeekday(dateKey)) continue;
+      if (NON_WORKING_STATUSES.has(status) && status !== 'absent') {
+        excludedDates.push({ date: dateKey, status });
+        continue;
+      }
+      countedDays += 1;
+    }
+
+    return {
+      avgPerDay,
+      remainingHours,
+      workingDaysRemaining,
+      neededAvgHoursPerDay: remainingHours / workingDaysRemaining,
+      estimatedDate: toLocalDateString(cursor),
+      excludedDates,
+    };
   }
 
   getCurrentWeekHours() {
@@ -849,8 +996,155 @@ class Store {
     sunday.setDate(monday.getDate() + 6);
     const sundayStr = toLocalDateString(sunday);
     return this.state.entries
-      .filter(e => e.date >= mondayStr && e.date <= sundayStr)
+      .filter(e => e.date >= mondayStr && e.date <= sundayStr && normalizeEntryStatus(e) === 'present')
       .reduce((s, e) => s + (parseFloat(e.hoursRendered) || 0), 0);
+  }
+
+  getDataQualityAlerts() {
+    const alerts = [];
+
+    this.getAllEntriesWithDerivedStatus().forEach(entry => {
+      if (entry.status !== 'present') return;
+
+      if ((entry.amTimeIn && !entry.amTimeOut) || (entry.pmTimeIn && !entry.pmTimeOut)) {
+        alerts.push({ type: 'incomplete', date: entry.date, message: 'Present day has an incomplete clock pair.' });
+      }
+      if ((parseFloat(entry.hoursRendered) || 0) > 0 && !String(entry.activities || '').trim()) {
+        alerts.push({ type: 'missing_activity', date: entry.date, message: 'Worked day is missing activity details.' });
+      }
+      if ((parseFloat(entry.hoursRendered) || 0) > 0 && (parseFloat(entry.hoursRendered) || 0) < 4) {
+        alerts.push({ type: 'short_day', date: entry.date, message: 'Worked day looks unusually short.' });
+      }
+    });
+
+    return alerts;
+  }
+
+  getActivityTemplates() {
+    const saved = JSON.parse(localStorage.getItem('dtr_activity_templates') || 'null');
+    return Array.isArray(saved) && saved.length ? saved : DEFAULT_ACTIVITY_TEMPLATES;
+  }
+
+  saveActivityTemplate(template) {
+    const templates = this.getActivityTemplates().filter(item => item.id !== template.id);
+    templates.unshift({
+      id: template.id || crypto.randomUUID(),
+      name: String(template.name || '').trim(),
+      activities: String(template.activities || '').trim(),
+      remarks: String(template.remarks || '').trim(),
+    });
+    localStorage.setItem('dtr_activity_templates', JSON.stringify(templates.slice(0, 20)));
+    return this.getActivityTemplates();
+  }
+
+  deleteActivityTemplate(id) {
+    const templates = this.getActivityTemplates().filter(item => item.id !== id);
+    localStorage.setItem('dtr_activity_templates', JSON.stringify(templates));
+    return templates;
+  }
+
+  async applyTemplateToDates(templateId, dates = [], { overwrite = false } = {}) {
+    const template = this.getActivityTemplates().find(item => item.id === templateId);
+    if (!template) throw new Error('Template not found');
+
+    for (const date of dates) {
+      const current = this.getEntryByDate(date);
+      if (current) {
+        await this.updateEntry(current.id, {
+          ...current,
+          status: normalizeEntryStatus(current),
+          activities: overwrite || !String(current.activities || '').trim() ? template.activities : current.activities,
+          remarks: overwrite || !String(current.remarks || '').trim() ? template.remarks : current.remarks,
+        });
+      } else {
+        await this.addEntry({
+          date,
+          status: 'absent',
+          activities: template.activities,
+          remarks: template.remarks,
+        });
+      }
+    }
+  }
+
+  findPreviousWorkingEntry(date) {
+    return this.getAllEntriesWithDerivedStatus().find(entry => entry.date < date && entry.status === 'present' && String(entry.activities || '').trim()) || null;
+  }
+
+  async reusePreviousWorkingDay(date, { overwrite = false } = {}) {
+    const previous = this.findPreviousWorkingEntry(date);
+    if (!previous) throw new Error('No previous working day with activities found');
+
+    const current = this.getEntryByDate(date);
+    if (current) {
+      await this.updateEntry(current.id, {
+        ...current,
+        status: normalizeEntryStatus(current),
+        activities: overwrite || !String(current.activities || '').trim() ? previous.activities : current.activities,
+        remarks: overwrite || !String(current.remarks || '').trim() ? previous.remarks : current.remarks,
+      });
+      return;
+    }
+
+    await this.addEntry({
+      date,
+      status: 'absent',
+      activities: previous.activities,
+      remarks: previous.remarks,
+    });
+  }
+
+  async batchUpdateStatuses(dates = [], status, { overwrite = false } = {}) {
+    const normalizedStatus = normalizeEntryStatus({ status });
+    for (const date of dates) {
+      const current = this.getEntryByDate(date);
+      if (current) {
+        if (!overwrite && normalizeEntryStatus(current) === normalizedStatus) continue;
+        await this.updateEntry(current.id, { ...current, status: normalizedStatus });
+      } else {
+        await this.addEntry({ date, status: normalizedStatus, remarks: '', activities: '' });
+      }
+    }
+  }
+
+  getSummaryPack({ dateFrom, dateTo } = {}) {
+    const entries = this.getAllEntriesWithDerivedStatus()
+      .filter(entry => (!dateFrom || entry.date >= dateFrom) && (!dateTo || entry.date <= dateTo));
+    const totals = entries.reduce((acc, entry) => {
+      acc.totalHours += parseFloat(entry.hoursRendered) || 0;
+      acc.totalOvertime += parseFloat(entry.overtimeHours) || 0;
+      acc.totalLate += parseInt(entry.lateMinutes) || 0;
+      acc.totalUndertime += parseInt(entry.undertimeMinutes) || 0;
+      acc.statuses[entry.status] = (acc.statuses[entry.status] || 0) + 1;
+      return acc;
+    }, {
+      totalHours: 0,
+      totalOvertime: 0,
+      totalLate: 0,
+      totalUndertime: 0,
+      statuses: { present: 0, leave: 0, vacation: 0, holiday: 0, no_ojt: 0, absent: 0 },
+    });
+
+    const activityCounts = new Map();
+    entries.forEach(entry => {
+      String(entry.activities || '')
+        .split(/\n|;/)
+        .map(item => item.trim())
+        .filter(Boolean)
+        .forEach(item => activityCounts.set(item, (activityCounts.get(item) || 0) + 1));
+    });
+
+    const highlights = [...activityCounts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([activity, count]) => ({ activity, count }));
+
+    return {
+      ...totals,
+      entries,
+      highlights,
+      narrative: `Completed ${totals.totalHours.toFixed(1)} hours with ${totals.statuses.present} present day(s) in the selected period.`,
+    };
   }
 
   // --- Data Management ---

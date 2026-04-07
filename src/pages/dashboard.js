@@ -11,7 +11,8 @@ export function render() {
   const remaining = store.getRemainingHours();
   const overtime = store.getTotalOvertime();
   const days = store.getDaysAttended();
-  const recent = store.getAllEntries().slice(0, 5);
+  const recent = store.getAllEntriesWithDerivedStatus().slice(0, 5);
+  const alerts = store.getDataQualityAlerts().slice(0, 5);
   const circumference = 2 * Math.PI * 70;
   const offset = circumference * (1 - progress / 100);
   const now = new Date();
@@ -34,11 +35,14 @@ export function render() {
     : `${fmtTimeStr(todayEntry.amTimeIn)} – ${fmtTimeStr(todayEntry.amTimeOut)} | ${fmtTimeStr(todayEntry.pmTimeIn)} – ${fmtTimeStr(todayEntry.pmTimeOut)}`;
 
   // Completion estimate
-  const est = store.getCompletionEstimate();
-  const estHtml = est
-    ? `<div class="detail-row"><span class="detail-label">Avg Hours/Day</span><span class="detail-value">${est.avgPerDay.toFixed(1)}h</span></div>
-       <div class="detail-row"><span class="detail-label">Est. Completion</span><span class="detail-value text-primary">${fmtDate(est.estimatedDate)}</span></div>`
-    : `<div class="detail-row"><span class="detail-label">Est. Completion</span><span class="detail-value text-muted">Need data</span></div>`;
+  const forecast = store.getCompletionForecast();
+  const estHtml = forecast
+    ? `<div class="detail-row"><span class="detail-label">Avg Hours/Day</span><span class="detail-value">${forecast.avgPerDay.toFixed(1)}h</span></div>
+       <div class="detail-row"><span class="detail-label">Working Days Left</span><span class="detail-value">${forecast.workingDaysRemaining}</span></div>
+       <div class="detail-row"><span class="detail-label">Needed Avg/Day</span><span class="detail-value">${forecast.neededAvgHoursPerDay.toFixed(1)}h</span></div>
+       <div class="detail-row"><span class="detail-label">Est. Completion</span><span class="detail-value text-primary">${fmtDate(forecast.estimatedDate)}</span></div>
+       <div class="detail-row"><span class="detail-label">Forecast Note</span><span class="detail-value">${forecast.excludedDates.length ? `${forecast.excludedDates.length} non-working day(s) excluded` : 'No excluded future workdays'}</span></div>`
+    : `<div class="detail-row"><span class="detail-label">Est. Completion</span><span class="detail-value text-muted">Need present-day data</span></div>`;
 
   // Weekly progress
   const weekHrs = store.getCurrentWeekHours();
@@ -112,17 +116,27 @@ export function render() {
       <div class="stat-card info"><div class="stat-label">Days Attended</div><div class="stat-value">${days}</div><div class="stat-sub">working days</div></div>
     </div>
 
+    <div class="card mb-6">
+      <div class="card-header"><h3>Attention Needed</h3></div>
+      ${alerts.length ? `
+        <div class="progress-details">
+          ${alerts.map(alert => `<div class="detail-row"><span class="detail-label">${fmtDate(alert.date)}</span><span class="detail-value">${alert.message}</span></div>`).join('')}
+        </div>
+      ` : `<div class="empty-state"><h4>No immediate record issues</h4><p>Your recent worked days look complete.</p></div>`}
+    </div>
+
     <!-- Recent Entries -->
     <div class="card">
       <div class="card-header"><h3>Recent Entries</h3><a href="#/timelog" class="btn btn-ghost btn-sm">View All</a></div>
       ${recent.length ? `
         <div class="table-wrap"><table>
-          <thead><tr><th>Date</th><th>Day</th><th>AM In</th><th>AM Out</th><th>PM In</th><th>PM Out</th><th>Hours</th></tr></thead>
+          <thead><tr><th>Date</th><th>Day</th><th>Status</th><th>AM In</th><th>AM Out</th><th>PM In</th><th>PM Out</th><th>Hours</th></tr></thead>
           <tbody>${recent.map(e => `<tr>
             <td>${fmtDate(e.date)}</td><td>${getDayName(e.date)}</td>
+            <td>${store.formatStatusLabel(e.status)}</td>
             <td class="font-mono">${fmtTimeStr(e.amTimeIn)}</td><td class="font-mono">${fmtTimeStr(e.amTimeOut)}</td>
             <td class="font-mono">${fmtTimeStr(e.pmTimeIn)}</td><td class="font-mono">${fmtTimeStr(e.pmTimeOut)}</td>
-            <td class="font-mono">${(e.pmTimeOut || e.amTimeOut) ? fmtHours(e.hoursRendered) : '--'}</td>
+            <td class="font-mono">${e.status === 'present' && (e.pmTimeOut || e.amTimeOut) ? fmtHours(e.hoursRendered) : '--'}</td>
           </tr>`).join('')}</tbody>
         </table></div>
       ` : `<div class="empty-state">${ICONS.clock}<h4>No entries yet</h4><p>Clock in to start tracking your OJT hours.</p></div>`}
@@ -139,7 +153,7 @@ export function mount() {
         const today = getCurrentDate(), now = getCurrentTime();
         const { phase, entry } = store.getClockPhase(today);
         if (phase === 0) {
-          await store.addEntry({ date: today, amTimeIn: now, amTimeOut: '', pmTimeIn: '', pmTimeOut: '', hoursRendered: 0, overtimeHours: 0, lateMinutes: calculateLate(now, s.expectedTimeIn), undertimeMinutes: 0, remarks: '', activities: '' });
+          await store.addEntry({ date: today, status: 'present', amTimeIn: now, amTimeOut: '', pmTimeIn: '', pmTimeOut: '', hoursRendered: 0, overtimeHours: 0, lateMinutes: calculateLate(now, s.expectedTimeIn), undertimeMinutes: 0, remarks: '', activities: '' });
           toast('AM Clocked In!', 'success');
         } else if (phase === 1) {
           const hrs = calculateEntryHours({ ...entry, amTimeOut: now });
