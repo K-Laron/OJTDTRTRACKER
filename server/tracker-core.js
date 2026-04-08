@@ -1,3 +1,5 @@
+import { isScheduledWorkday } from '../shared/work-schedule.js';
+
 export const DEFAULT_SETTINGS = {
   requiredHours: 486,
   breakDuration: 60,
@@ -359,10 +361,9 @@ export function calculateCompletionForecast({ today, requiredHours, entries = []
   while (countedDays < workingDaysRemaining) {
     cursor.setDate(cursor.getDate() + 1);
     const isoDate = toLocalDateString(cursor);
-    const day = cursor.getDay();
     const status = statusesByDate.get(isoDate) || '';
 
-    if (day === 0 || day === 6) {
+    if (!isScheduledWorkday(isoDate)) {
       continue;
     }
     if (isExcludedWorkdayStatus(status)) {

@@ -115,6 +115,45 @@ function openAddHolidayModal() {
   };
 }
 
+function formatHolidayTypeLabel(type) {
+  return String(type || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function renderHolidayLane(title, items, variant) {
+  if (!items.length) return '';
+  const countClass = items.length === 1
+    ? 'calendar-pill-list--count-1'
+    : items.length === 2
+      ? 'calendar-pill-list--count-2'
+      : items.length === 3
+        ? 'calendar-pill-list--count-3'
+      : 'calendar-pill-list--count-many';
+
+  return `
+    <section class="calendar-pill-lane calendar-pill-lane--${variant}">
+      <div class="calendar-pill-lane-title">${title}</div>
+      <div class="calendar-pill-list ${countClass}">
+        ${items.map(item => `
+          <article class="calendar-pill calendar-pill--${variant}" data-date="${item.date}">
+            <div class="calendar-pill-date">
+              <span class="calendar-pill-date-num">${new Date(item.date).getDate()}</span>
+              <span class="calendar-pill-date-day">${getDayName(item.date)}</span>
+            </div>
+            <div class="calendar-pill-body">
+              <div class="calendar-pill-name">${item.name}</div>
+              <div class="calendar-pill-meta">${fmtDate(item.date)}</div>
+            </div>
+            <div class="calendar-pill-actions">
+              <span class="badge ${variant === 'holiday' ? 'badge-info' : ''} calendar-pill-type">${formatHolidayTypeLabel(item.type)}</span>
+              <button class="btn-icon btn-rm-holiday" data-date="${item.date}" title="Remove">${ICONS.trash}</button>
+            </div>
+          </article>
+        `).join('')}
+      </div>
+    </section>
+  `;
+}
+
 export function render() {
   const daysInMonth = getDaysInMonth(selYear, selMonth);
   const firstDay = new Date(selYear, selMonth, 1).getDay(); // 0=Sun
@@ -140,6 +179,8 @@ export function render() {
   // Attendance summary for this month
   const summary = store.getAttendanceSummary(selYear, selMonth);
   const monthHolidays = context.monthHolidays;
+  const holidayItems = monthHolidays.filter(item => item.type === 'holiday');
+  const leaveItems = monthHolidays.filter(item => item.type !== 'holiday');
 
   return `
     <div id="calendar-page" class="calendar-page calendar-page--desktop-fit">
@@ -183,23 +224,19 @@ export function render() {
         </div>
 
         ${monthHolidays.length ? `
-          <div class="mt-4">
+          <div class="calendar-events mt-4">
             <h4 style="font-size:0.9rem;margin-bottom:8px">Holidays & Leaves this month</h4>
-            <div class="table-wrap">
-              <table>
-                <thead><tr><th>Date</th><th>Day</th><th>Name</th><th>Type</th><th>Action</th></tr></thead>
-                <tbody>
-                  ${monthHolidays.map(h => `<tr>
-                    <td>${fmtDate(h.date)}</td><td>${getDayName(h.date)}</td>
-                    <td>${h.name}</td>
-                    <td>${h.type.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase())}</td>
-                    <td><button class="btn-icon btn-rm-holiday" data-date="${h.date}" title="Remove">${ICONS.trash}</button></td>
-                  </tr>`).join('')}
-                </tbody>
-              </table>
+            <div class="calendar-pill-groups">
+              ${renderHolidayLane('Holidays', holidayItems, 'holiday')}
+              ${renderHolidayLane('Leaves', leaveItems, 'leave')}
             </div>
           </div>
-        ` : ''}
+        ` : `
+          <div class="calendar-events calendar-events-empty mt-4">
+            <h4 style="font-size:0.9rem;margin-bottom:8px">Holidays & Leaves this month</h4>
+            <p class="text-muted">No holidays or leaves recorded for ${MONTHS[selMonth]} ${selYear}.</p>
+          </div>
+        `}
       </div>
     </div>
   `;
@@ -263,6 +300,12 @@ export function mount(container) {
           toast(err.message || 'Failed to remove holiday/leave', 'error');
         }
       }
+      return;
+    }
+
+    const holidayPill = target.closest('.calendar-pill[data-date]');
+    if (holidayPill?.dataset.date) {
+      showDayDetails(holidayPill.dataset.date);
       return;
     }
 

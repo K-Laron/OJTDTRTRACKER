@@ -1,5 +1,6 @@
 import { store } from '../store.js';
 import { getDayName, getDaysInMonth, MONTHS, ICONS, fmtTimeStr, requestRender } from '../utils.js';
+import { getScheduledNonWorkingStatus } from '../../shared/work-schedule.js';
 
 let selYear = new Date().getFullYear();
 let selMonth = new Date().getMonth();
@@ -105,9 +106,9 @@ function renderSheetContent() {
   const daysInMonth = getDaysInMonth(selYear, selMonth);
   const profile = store.state.profile;
   const scheduleText = `${fmtTimeStr(store.state.settings.expectedTimeIn)} - ${fmtTimeStr(store.state.settings.expectedTimeOut)}`;
-  const totalHours = entries.reduce((sum, entry) => sum + (((entry.status || 'present') === 'present') ? (entry.hoursRendered || 0) : 0), 0);
-  const totalOvertime = entries.reduce((sum, entry) => sum + (((entry.status || 'present') === 'present') ? (entry.overtimeHours || 0) : 0), 0);
-  const daysWorked = entries.reduce((count, entry) => count + ((((entry.status || 'present') === 'present') && (entry.amTimeOut || entry.pmTimeOut)) ? 1 : 0), 0);
+  const totalHours = entries.reduce((sum, entry) => sum + ((store.getEntryStatus(entry) === 'present') ? (entry.hoursRendered || 0) : 0), 0);
+  const totalOvertime = entries.reduce((sum, entry) => sum + ((store.getEntryStatus(entry) === 'present') ? (entry.overtimeHours || 0) : 0), 0);
+  const daysWorked = entries.reduce((count, entry) => count + ((store.getEntryStatus(entry) === 'present' && (entry.amTimeOut || entry.pmTimeOut)) ? 1 : 0), 0);
 
   const rows = [];
   for (let day = 1; day <= daysInMonth; day++) {
@@ -116,14 +117,18 @@ function renderSheetContent() {
     const entry = entriesByDate.get(dateStr);
     const holiday = holidaysByDate.get(dateStr);
     const isWeekend = dayName === 'Sat' || dayName === 'Sun';
-    const derivedStatus = entry?.status || (holiday ? (holiday.type === 'holiday' ? 'holiday' : holiday.type === 'vacation_leave' ? 'vacation' : 'leave') : '');
+    const derivedStatus = entry
+      ? store.getEntryStatus(entry)
+      : (holiday
+        ? (holiday.type === 'holiday' ? 'holiday' : holiday.type === 'vacation_leave' ? 'vacation' : 'leave')
+        : getScheduledNonWorkingStatus(dateStr));
     const holidayLabel = derivedStatus ? derivedStatus.replace('_', ' ').replace(/\b\w/g, char => char.toUpperCase()) : '';
     const isPresent = !derivedStatus || derivedStatus === 'present';
     const activityText = entry?.activities || holiday?.name || '';
     const remarksText = entry?.remarks || holidayLabel || '';
 
     rows.push(`
-      <tr style="${isWeekend || holiday ? 'opacity:0.5' : ''}">
+      <tr style="${isWeekend || holiday || derivedStatus === 'no_ojt' ? 'opacity:0.5' : ''}">
         <td>${day}</td>
         <td>${dayName}</td>
         <td class="font-mono">${isPresent ? fmtTimeStr(entry?.amTimeIn) : ''}</td>

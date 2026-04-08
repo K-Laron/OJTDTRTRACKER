@@ -290,6 +290,24 @@ test('calculateCompletionForecast skips non-working future statuses', () => {
   assert.equal(forecast.estimatedDate, '2026-04-14');
   assert.deepEqual(
     forecast.excludedDates.map(item => item.status),
-    ['leave', 'vacation', 'no_ojt', 'holiday']
+    ['leave', 'vacation', 'no_ojt']
   );
+});
+
+test('calculateCompletionForecast skips Fridays after the four-day workweek starts on 2026-03-09', () => {
+  const forecast = calculateCompletionForecast({
+    today: '2026-03-12',
+    requiredHours: 40,
+    entries: [
+      { date: '2026-03-09', status: 'present', hoursRendered: 8 },
+      { date: '2026-03-10', status: 'present', hoursRendered: 8 },
+      { date: '2026-03-11', status: 'present', hoursRendered: 8 },
+      { date: '2026-03-12', status: 'present', hoursRendered: 8 },
+    ],
+  });
+
+  assert.equal(forecast.avgPerDay, 8);
+  assert.equal(forecast.remainingHours, 8);
+  assert.equal(forecast.workingDaysRemaining, 1);
+  assert.equal(forecast.estimatedDate, '2026-03-16');
 });

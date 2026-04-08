@@ -1,3 +1,5 @@
+import { getScheduledNonWorkingStatus, isScheduledWorkday } from '../shared/work-schedule.js';
+
 const DEFAULT_STATE = {
   profile: {
     name: '', department: '', school: '', supervisor: '',
@@ -50,10 +52,15 @@ function getWeekStartKey(dateString) {
 
 function normalizeEntryStatus(entry = {}) {
   const normalized = String(entry.status || '').trim().toLowerCase();
-  if (ENTRY_STATUSES.has(normalized)) return normalized;
+  const scheduledNonWorkingStatus = getScheduledNonWorkingStatus(entry.date || '');
+  if (ENTRY_STATUSES.has(normalized)) {
+    if (normalized === 'absent' && scheduledNonWorkingStatus) return scheduledNonWorkingStatus;
+    return normalized;
+  }
   if (entry.amTimeIn || entry.amTimeOut || entry.pmTimeIn || entry.pmTimeOut || Number(entry.hoursRendered) > 0) {
     return 'present';
   }
+  if (scheduledNonWorkingStatus) return scheduledNonWorkingStatus;
   return 'absent';
 }
 
@@ -64,9 +71,7 @@ function formatStatusLabel(status) {
 }
 
 function isWeekday(dateString) {
-  const date = new Date(`${dateString}T00:00:00`);
-  const day = date.getDay();
-  return day !== 0 && day !== 6;
+  return isScheduledWorkday(dateString);
 }
 
 class Store {
@@ -541,7 +546,27 @@ class Store {
     if (entry) return { ...entry, status: normalizeEntryStatus(entry), source: 'entry' };
 
     const holiday = this.isHoliday(date);
-    if (!holiday) return null;
+    if (!holiday) {
+      const scheduledNonWorkingStatus = getScheduledNonWorkingStatus(date);
+      if (!scheduledNonWorkingStatus) return null;
+
+      return {
+        id: `status-${date}`,
+        date,
+        status: scheduledNonWorkingStatus,
+        amTimeIn: '',
+        amTimeOut: '',
+        pmTimeIn: '',
+        pmTimeOut: '',
+        hoursRendered: 0,
+        overtimeHours: 0,
+        lateMinutes: 0,
+        undertimeMinutes: 0,
+        remarks: '',
+        activities: '',
+        source: 'schedule',
+      };
+    }
 
     return {
       id: `status-${date}`,
