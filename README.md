@@ -1,15 +1,16 @@
 # OJT DTR Tracker
 
-OJT DTR Tracker is a local-first daily time record system for OJT hour tracking. The current system is a browser app served by Vite on the frontend, an Express API on the backend, and MongoDB for persistence, with PDF/Excel export, audit history, import preview, and Philippine holiday sync.
+OJT DTR Tracker is a local desktop daily time record system for OJT hour tracking. The current system is a browser app served by Vite on the frontend, an Express API on the backend, and MongoDB for persistence, with account-based login, PDF/Excel export, JSON backup/import, activity history, and Philippine holiday sync.
 
 ## What It Does
 
 - Tracks AM and PM time in/out entries
 - Tracks one day-level status per record: Present, Leave, Vacation, Holiday, No OJT, or Absent
 - Recalculates rendered hours, overtime, late minutes, and undertime on the server
-- Generates DTR views plus PDF and Excel exports
-- Supports login/registration, config updates, audit history, and restore actions
-- Supports holiday records, public-holiday sync, JSON export, and import preview
+- Generates DTR views plus PDF and Excel exports with detailed filenames that include profile name, account username, covered period, and export date
+- Supports login/registration, config updates, notification reminders, and auto-backup JSON downloads
+- Supports holiday records, public-holiday sync, JSON export/import preview, activity templates, and batch status updates
+- Supports activity history with restore actions for entries, holidays, config, and imports
 - Pushes live updates to the frontend through `/api/sync`
 
 ## Runtime Architecture
@@ -30,6 +31,7 @@ OJT DTR TRACKER
 ├─ scripts/                Windows PowerShell and Node helpers for startup and MongoDB
 ├─ mongo/                  Local MongoDB config for the optional workspace replica set
 ├─ public/                 Static assets and PWA files
+├─ LOCAL_SETUP.md          Local Mongo and launcher notes for this workspace
 ├─ Start-Tracker.bat       Starts the app with hidden background services
 ├─ Stop-Tracker.bat        Stops the tracker services and local MongoDB helper
 ├─ package.json            Frontend scripts and shared dependencies
@@ -145,10 +147,12 @@ mongodb://127.0.0.1:27018/ojt_dtr_tracker?replicaSet=rs0
 - Larger JSON imports up to the backend request limit of `5 MB`
 - Audit trail with restore actions
 - Philippine public-holiday synchronization with cached retry backoff when the public API is unavailable
-- DTR printing plus PDF and Excel export
+- DTR printing plus PDF and Excel export with detailed filenames
+- Manual JSON export and auto-backup downloads with detailed filenames
 - Reports, attendance summaries, and activity history
 - Workday-aware completion forecasting that excludes future holidays, leave, vacation, and no-OJT dates
-- Activity templates, batch status updates, summary-pack reporting, and data-quality alerts
+- Activity templates, reuse-previous-day helpers, batch status updates, summary-pack reporting, and data-quality alerts
+- Browser notification reminders and configurable auto-backup cadence
 
 ## Day Status Rules
 
@@ -158,7 +162,7 @@ mongodb://127.0.0.1:27018/ojt_dtr_tracker?replicaSet=rs0
 
 ## Notes
 
-- This project is tuned for a local single-user workflow.
+- This project is tuned for a local desktop workflow, but data is stored per account through the built-in login system.
 - Generated folders such as `.runtime/`, `dist/`, `node_modules/`, and local Mongo data are not committed.
 - `server/.env` is intentionally local-only and not committed.
 
