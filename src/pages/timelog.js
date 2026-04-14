@@ -53,7 +53,7 @@ function getMostCommonTime(field) {
 
 function entryForm(entry = null) {
   const isEdit = Boolean(entry);
-  const status = entry?.status || (entry?.amTimeIn || entry?.pmTimeIn ? 'present' : 'absent');
+  const status = entry?.status || 'present';
   const defAmIn = isEdit ? (entry.amTimeIn || '') : getMostCommonTime('amTimeIn');
   const defAmOut = isEdit ? (entry.amTimeOut || '') : getMostCommonTime('amTimeOut');
   const defPmIn = isEdit ? (entry.pmTimeIn || '') : getMostCommonTime('pmTimeIn');

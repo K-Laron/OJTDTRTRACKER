@@ -1,8 +1,9 @@
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
-import { MONTHS, getDayName, getDaysInMonth, toast, fmtTimeStr } from '../utils.js';
+import { MONTHS, getCurrentDate, getDayName, getDaysInMonth, toast, fmtTimeStr } from '../utils.js';
+import { buildDTRExportFilename } from './export-filenames.js';
 
-export function exportDTRtoPDF(entries, holidays, month, year, profile, settings) {
+export function exportDTRtoPDF(entries, holidays, month, year, profile, settings, username = '') {
   try {
     const scheduleText = `${fmtTimeStr(settings.expectedTimeIn)} - ${fmtTimeStr(settings.expectedTimeOut)}`;
     // Folio Portrait format (8.5 x 13 inches)
@@ -101,7 +102,14 @@ export function exportDTRtoPDF(entries, holidays, month, year, profile, settings
     doc.setFontSize(6.5);
     doc.text('Verified By (Supervisor)', 162.5, sigY + 8, { align: 'center' });
 
-    doc.save(`DTR_${MONTHS[month]}_${year}.pdf`);
+    doc.save(buildDTRExportFilename({
+      profileName: profile.name,
+      username,
+      month,
+      year,
+      exportedDate: getCurrentDate(),
+      extension: 'pdf',
+    }));
     toast('PDF exported!', 'success');
   } catch (err) {
     console.error('PDF export error:', err);

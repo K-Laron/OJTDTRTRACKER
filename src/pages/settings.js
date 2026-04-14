@@ -1,5 +1,6 @@
 import { store } from '../store.js';
-import { toast, confirmDialog, openModal, closeModal, fmtDate, ICONS } from '../utils.js';
+import { toast, confirmDialog, openModal, closeModal, fmtDate, getCurrentDate, ICONS } from '../utils.js';
+import { buildJsonExportFilename } from '../lib/export-filenames.js';
 
 function renderImportPreview(summary) {
   const diff = summary.diff || {};
@@ -209,7 +210,15 @@ export function mount() {
   // Data management
   document.getElementById('btn-export-data')?.addEventListener('click', () => {
     const blob = new Blob([store.exportData()], { type: 'application/json' }); const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = 'ojt-dtr-data.json'; a.click(); URL.revokeObjectURL(url);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = buildJsonExportFilename({
+      profileName: store.state.profile.name,
+      username: store.username,
+      exportedDate: getCurrentDate(),
+    });
+    a.click();
+    URL.revokeObjectURL(url);
     toast('Data exported!', 'success');
   });
   document.getElementById('btn-import-data')?.addEventListener('change', e => {

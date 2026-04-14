@@ -1,7 +1,8 @@
 import * as XLSX from 'xlsx';
-import { MONTHS, getDayName, getDaysInMonth, toast, fmtTimeStr } from '../utils.js';
+import { MONTHS, getCurrentDate, getDayName, getDaysInMonth, toast, fmtTimeStr } from '../utils.js';
+import { buildDTRExportFilename } from './export-filenames.js';
 
-export function exportDTRtoExcel(entries, holidays, month, year, profile, settings) {
+export function exportDTRtoExcel(entries, holidays, month, year, profile, settings, username = '') {
   try {
     const scheduleText = `${fmtTimeStr(settings.expectedTimeIn)} - ${fmtTimeStr(settings.expectedTimeOut)}`;
     const data = [
@@ -50,7 +51,14 @@ export function exportDTRtoExcel(entries, holidays, month, year, profile, settin
 
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, `DTR ${MONTHS[month].slice(0, 3)} ${year}`);
-    XLSX.writeFile(wb, `DTR_${MONTHS[month]}_${year}.xlsx`);
+    XLSX.writeFile(wb, buildDTRExportFilename({
+      profileName: profile.name,
+      username,
+      month,
+      year,
+      exportedDate: getCurrentDate(),
+      extension: 'xlsx',
+    }));
     toast('Excel exported!', 'success');
   } catch (err) {
     console.error('Excel export error:', err);

@@ -269,14 +269,14 @@ function bindDtrEvents(root) {
     const exportPdfButton = target.closest('#btn-export-pdf');
     if (exportPdfButton) {
       const { exportDTRtoPDF } = await import('../lib/export-pdf.js');
-      exportDTRtoPDF(getVisibleEntries(), store.getHolidaysInMonth(selYear, selMonth), selMonth, selYear, store.state.profile, store.state.settings);
+      exportDTRtoPDF(getVisibleEntries(), store.getHolidaysInMonth(selYear, selMonth), selMonth, selYear, store.state.profile, store.state.settings, store.username);
       return;
     }
 
     const exportExcelButton = target.closest('#btn-export-excel');
     if (exportExcelButton) {
       const { exportDTRtoExcel } = await import('../lib/export-excel.js');
-      exportDTRtoExcel(getVisibleEntries(), store.getHolidaysInMonth(selYear, selMonth), selMonth, selYear, store.state.profile, store.state.settings);
+      exportDTRtoExcel(getVisibleEntries(), store.getHolidaysInMonth(selYear, selMonth), selMonth, selYear, store.state.profile, store.state.settings, store.username);
     }
   });
 }

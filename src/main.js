@@ -2,6 +2,7 @@ import './style.css';
 import { router } from './router.js';
 import { store } from './store.js';
 import { ICONS, getCurrentDate, requestRender, toast } from './utils.js';
+import { buildJsonExportFilename } from './lib/export-filenames.js';
 
 import * as dashboard from './pages/dashboard.js';
 import * as timelog from './pages/timelog.js';
@@ -298,7 +299,11 @@ function checkAutoBackup() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `ojt-dtr-backup-${getCurrentDate()}.json`;
+    a.download = buildJsonExportFilename({
+      profileName: store.state.profile.name,
+      username: store.username,
+      exportedDate: getCurrentDate(),
+    });
     a.click();
     URL.revokeObjectURL(url);
     store.updateSettings({ lastBackupDate: new Date().toISOString() }).catch(err => {
