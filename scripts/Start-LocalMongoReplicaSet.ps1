@@ -6,7 +6,12 @@ param(
 $ErrorActionPreference = "Stop"
 
 if (-not (Test-Path $MongoBin)) {
-  throw "mongod.exe not found at $MongoBin"
+  $portableMongoBin = Join-Path $PSScriptRoot "..\.runtime\mongodb-8.3.2\mongodb-win32-x86_64-windows-8.3.2\bin\mongod.exe"
+  if (Test-Path $portableMongoBin) {
+    $MongoBin = $portableMongoBin
+  } else {
+    throw "mongod.exe not found at $MongoBin"
+  }
 }
 
 if (-not (Test-Path $ConfigPath)) {

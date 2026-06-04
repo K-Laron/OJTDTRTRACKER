@@ -1,10 +1,17 @@
 import { store } from './store.js';
+import { getScheduleSegments, getScheduledWorkWindow } from '../shared/work-schedule.js';
+import {
+  calculateDtrEntryHours,
+  calculateDtrHours,
+  calculateDtrOvertime,
+  formatDtrDayName,
+  formatOvertimeDuration as formatSharedOvertimeDuration,
+  parseDtrTime,
+} from '../shared/dtr-rules.js';
 
 // --- Time Parsing & Formatting ---
 export function parseTime(t) {
-  if (!t) return null;
-  const [h, m] = t.split(':').map(Number);
-  return h * 60 + m;
+  return parseDtrTime(t);
 }
 
 export function formatTimeMins(mins) {
@@ -26,13 +33,15 @@ export function fmtTimeStr(t) {
 
 // --- Hours Calculation ---
 export function calculateHours(timeIn, timeOut, breakMins = 0) {
-  const i = parseTime(timeIn), o = parseTime(timeOut);
-  if (i == null || o == null) return 0;
-  return Math.max(0, (o - i - breakMins) / 60);
+  return calculateDtrHours(timeIn, timeOut, breakMins);
 }
 
 export function calculateOvertime(hours, threshold = 8) {
   return Math.max(0, hours - threshold);
+}
+
+export function calculateOvertimeForDate(date, hours) {
+  return calculateDtrOvertime(date, hours);
 }
 
 export function calculateLate(timeIn, expected) {
@@ -47,12 +56,45 @@ export function calculateUndertime(timeOut, expected) {
   return Math.max(0, e - o);
 }
 
+export function getScheduleForDate(date, settings = store.state.settings) {
+  return getScheduledWorkWindow(date, settings);
+}
+
+export function formatScheduleWindow(schedule = {}) {
+  if (schedule.isSplit) {
+    return `${fmtTimeStr(schedule.amTimeIn)} - ${fmtTimeStr(schedule.amTimeOut)} / ${fmtTimeStr(schedule.pmTimeIn)} - ${fmtTimeStr(schedule.pmTimeOut)}`;
+  }
+
+  return `${fmtTimeStr(schedule.expectedTimeIn)} - ${fmtTimeStr(schedule.expectedTimeOut)}`;
+}
+
+function formatScheduleRange(startDate, endDate) {
+  const start = new Date(`${startDate}T00:00:00`);
+  const end = new Date(`${endDate}T00:00:00`);
+  const startLabel = start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const endLabel = end.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+  if (startDate === endDate) return startLabel;
+  return `${startLabel}-${endLabel}`;
+}
+
+export function formatScheduleSummary(dateFrom, dateTo, settings = store.state.settings) {
+  const segments = getScheduleSegments(dateFrom, dateTo, settings, { workdaysOnly: true });
+  if (!segments.length) {
+    return formatScheduleWindow(getScheduledWorkWindow(dateFrom, settings));
+  }
+  if (segments.length === 1) {
+    return formatScheduleWindow(segments[0]);
+  }
+
+  return segments
+    .map(segment => `${formatScheduleWindow(segment)} (${formatScheduleRange(segment.startDate, segment.endDate)})`)
+    .join('; ');
+}
+
 // Calculates total hours from an entry with AM/PM split
 export function calculateEntryHours(e) {
-  let total = 0;
-  if (e.amTimeIn && e.amTimeOut) total += calculateHours(e.amTimeIn, e.amTimeOut);
-  if (e.pmTimeIn && e.pmTimeOut) total += calculateHours(e.pmTimeIn, e.pmTimeOut);
-  return total;
+  return calculateDtrEntryHours(e);
 }
 
 // --- Display Formatting ---
@@ -60,6 +102,10 @@ export function fmtHours(h) {
   if (!h && h !== 0) return '0h';
   const hrs = Math.floor(h), mins = Math.round((h - hrs) * 60);
   return mins === 0 ? `${hrs}h` : `${hrs}h ${mins}m`;
+}
+
+export function formatOvertimeDuration(hours, options = {}) {
+  return formatSharedOvertimeDuration(hours, options);
 }
 
 export function fmtMinutes(m) {
@@ -79,6 +125,10 @@ export function fmtDateLong(d) {
 
 export function getDayName(d) {
   return new Date(d + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short' });
+}
+
+export function getFullDayName(d) {
+  return formatDtrDayName(d);
 }
 
 export const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];

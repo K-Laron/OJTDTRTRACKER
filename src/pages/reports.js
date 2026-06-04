@@ -336,7 +336,7 @@ async function loadAuditEvents() {
   auditError = '';
   try {
     const res = await fetch('/api/audit?limit=50', {
-      headers: { 'X-User-Id': store.userId }
+      headers: store._authHeaders()
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data?.error || 'Failed to load activity');

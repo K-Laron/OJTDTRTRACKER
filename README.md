@@ -7,11 +7,14 @@ OJT DTR Tracker is a local desktop daily time record system for OJT hour trackin
 - Tracks AM and PM time in/out entries
 - Tracks one day-level status per record: Present, Leave, Vacation, Holiday, No OJT, or Absent
 - Recalculates rendered hours, overtime, late minutes, and undertime on the server
+- Uses a 10-hour daily overtime threshold from March 9, 2026 onward for the four-day workweek
 - Generates DTR views plus PDF and Excel exports with detailed filenames that include profile name, account username, covered period, and export date
 - Supports login/registration, config updates, notification reminders, and auto-backup JSON downloads
 - Supports holiday records, public-holiday sync, JSON export/import preview, activity templates, and batch status updates
 - Supports activity history with restore actions for entries, holidays, config, and imports
 - Pushes live updates to the frontend through `/api/sync`
+- Stores new passwords with Node `scrypt` hashes and migrates older plaintext passwords on successful login
+- Requires a server-issued auth token with each authenticated API request instead of trusting `userId` alone
 
 ## Runtime Architecture
 
@@ -138,6 +141,7 @@ mongodb://127.0.0.1:27018/ojt_dtr_tracker?replicaSet=rs0
 - `scripts/Start-TrackerServices.ps1`: hidden startup helper for backend and frontend
 - `scripts/Stop-TrackerServices.ps1`: hidden shutdown helper for backend and frontend
 - `scripts/ensure-local-mongo-rs.mjs`: initializes or verifies replica set `rs0`
+- `scripts/recalculate-dtr-derived-fields.mjs`: dry-run-first repair tool for stale rendered hours, overtime, late, and undertime values. Run `node .\scripts\recalculate-dtr-derived-fields.mjs` to inspect changes, then add `--apply` to write updates with a JSON backup in `output/backups/`.
 
 ## Current Capabilities
 
@@ -153,6 +157,7 @@ mongodb://127.0.0.1:27018/ojt_dtr_tracker?replicaSet=rs0
 - Workday-aware completion forecasting that excludes future holidays, leave, vacation, and no-OJT dates
 - Activity templates, reuse-previous-day helpers, batch status updates, summary-pack reporting, and data-quality alerts
 - Browser notification reminders and configurable auto-backup cadence
+- Basic security hardening: normalized usernames, stronger registration password rules, auth attempt throttling, auth token checks, restricted CORS origins, and common API security headers
 
 ## Day Status Rules
 

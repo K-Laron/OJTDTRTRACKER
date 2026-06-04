@@ -3,6 +3,14 @@ import mongoose from 'mongoose';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { AuditEvent, User, Entry, Holiday, Config } from './models.js';
+import {
+  createAuthToken,
+  hashAuthToken,
+  hashPassword,
+  validateAuthInput,
+  verifyPassword,
+  isPasswordHash,
+} from './auth-security.js';
 import { syncPhilippinePublicHolidays } from './holiday-sync.js';
 import {
   buildImportPreview,
@@ -21,8 +29,27 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/ojt_dtr_tracker';
+const allowedOrigins = new Set(
+  String(process.env.CORS_ORIGINS || 'http://localhost:5173,http://127.0.0.1:5173')
+    .split(',')
+    .map(origin => origin.trim())
+    .filter(Boolean)
+);
 
-app.use(cors());
+app.disable('x-powered-by');
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  next();
+});
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.has(origin)) return callback(null, true);
+    return callback(new Error('CORS origin not allowed'));
+  },
+}));
 app.use(express.json({ limit: '5mb' }));
 
 // Connect to MongoDB
@@ -33,8 +60,17 @@ mongoose.connect(MONGODB_URI)
 // --- Real-time Sync (SSE) ---
 let clients = [];
 
-app.get('/api/sync', (req, res) => {
+app.get('/api/sync', async (req, res, next) => {
   const userId = req.query.userId;
+  const authToken = req.query.authToken;
+  try {
+    const user = userId && authToken ? await User.findById(userId).lean() : null;
+    if (!user?.authTokenHash || user.authTokenHash !== hashAuthToken(authToken)) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+  } catch (err) {
+    return next(err);
+  }
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -139,6 +175,10 @@ function cleanConfigForAudit(config) {
   };
 }
 
+function normalizeEntriesForResponse(entries = [], settings = DEFAULT_SETTINGS) {
+  return entries.map(entry => sanitizeEntry(entry, settings, { requireId: true }));
+}
+
 async function getUserStateSnapshot(userId, session = null) {
   const entriesQuery = Entry.find({ userId });
   const holidaysQuery = Holiday.find({ userId });
@@ -208,6 +248,56 @@ function toConflictResponse(current, resolution) {
   };
 }
 
+const authAttempts = new Map();
+const AUTH_ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
+const AUTH_ATTEMPT_LIMIT = 8;
+
+function getClientIp(req) {
+  return req.socket?.remoteAddress || 'unknown';
+}
+
+function authAttemptKey(req, username) {
+  return `${getClientIp(req)}:${String(username || '').toLowerCase()}`;
+}
+
+function isAuthLimited(req, username) {
+  const key = authAttemptKey(req, username);
+  const now = Date.now();
+  const record = authAttempts.get(key);
+  if (!record || record.expiresAt <= now) {
+    authAttempts.delete(key);
+    return false;
+  }
+  return record.count >= AUTH_ATTEMPT_LIMIT;
+}
+
+function recordAuthFailure(req, username) {
+  const key = authAttemptKey(req, username);
+  const now = Date.now();
+  const record = authAttempts.get(key);
+  const next = record && record.expiresAt > now
+    ? { count: record.count + 1, expiresAt: record.expiresAt }
+    : { count: 1, expiresAt: now + AUTH_ATTEMPT_WINDOW_MS };
+  authAttempts.set(key, next);
+}
+
+function clearAuthFailures(req, username) {
+  authAttempts.delete(authAttemptKey(req, username));
+}
+
+async function issueAuthResponse(user) {
+  const token = createAuthToken();
+  user.authTokenHash = hashAuthToken(token);
+  user.authTokenCreatedAt = new Date();
+  await user.save();
+  return {
+    success: true,
+    userId: user._id.toString(),
+    username: user.username,
+    authToken: token,
+  };
+}
+
 // --- API Routes ---
 
 app.get('/api/audit', requireAuth, async (req, res) => {
@@ -224,38 +314,60 @@ app.get('/api/audit', requireAuth, async (req, res) => {
 // --- Auth ---
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const { username, password } = validateAuthInput(req.body);
+    if (isAuthLimited(req, username)) {
+      return res.status(429).json({ error: 'Too many sign-in attempts. Try again later.' });
+    }
     const existing = await User.findOne({ username });
     if (existing) return res.status(400).json({ error: 'Username already exists' });
     
-    const user = new User({ username, password });
-    await user.save();
-    res.json({ success: true, userId: user._id.toString(), username: user.username });
+    const user = new User({ username, password: await hashPassword(password) });
+    res.json(await issueAuthResponse(user));
   } catch (err) {
     console.error('Registration error:', err);
-    res.status(500).json({ error: 'Registration failed' });
+    res.status(getErrorStatus(err)).json({ error: err.message || 'Registration failed' });
   }
 });
 
 app.post('/api/auth/login', async (req, res) => {
   try {
-    const { username, password } = req.body;
-    const user = await User.findOne({ username, password });
-    if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+    const { username, password } = validateAuthInput(req.body, { enforcePasswordPolicy: false });
+    if (isAuthLimited(req, username)) {
+      return res.status(429).json({ error: 'Too many sign-in attempts. Try again later.' });
+    }
+    const user = await User.findOne({ username });
+    const passwordMatches = user ? await verifyPassword(password, user.password) : false;
+    if (!user || !passwordMatches) {
+      recordAuthFailure(req, username);
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    if (!isPasswordHash(user.password)) {
+      user.password = await hashPassword(password);
+    }
+    clearAuthFailures(req, username);
     
-    res.json({ success: true, userId: user._id.toString(), username: user.username });
+    res.json(await issueAuthResponse(user));
   } catch (err) {
     console.error('Login error:', err);
-    res.status(500).json({ error: 'Login failed' });
+    res.status(getErrorStatus(err)).json({ error: err.message || 'Login failed' });
   }
 });
 
 // Middleware to require userId
-function requireAuth(req, res, next) {
+async function requireAuth(req, res, next) {
   const userId = req.headers['x-user-id'];
-  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-  req.userId = userId;
-  next();
+  const authToken = req.headers['x-auth-token'];
+  if (!userId || !authToken) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const user = await User.findById(userId).lean();
+    if (!user?.authTokenHash || user.authTokenHash !== hashAuthToken(authToken)) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    req.userId = userId;
+    next();
+  } catch (err) {
+    next(err);
+  }
 }
 
 // Entries
@@ -273,16 +385,18 @@ app.get('/api/entries', requireAuth, async (req, res) => {
       if (dateTo) query.date.$lte = dateTo;
     }
 
+    const settingsPromise = getUserSettings(req.userId);
     const entryQuery = Entry.find(query).sort({ date: -1 }).lean();
     if (Number.isFinite(page) || Number.isFinite(limit)) {
       const safePage = Math.max(1, Number.isFinite(page) ? page : 1);
       const safeLimit = Math.min(500, Math.max(1, Number.isFinite(limit) ? limit : 50));
-      const [items, total] = await Promise.all([
+      const [settings, items, total] = await Promise.all([
+        settingsPromise,
         entryQuery.skip((safePage - 1) * safeLimit).limit(safeLimit),
         Entry.countDocuments(query),
       ]);
       return res.json({
-        items,
+        items: normalizeEntriesForResponse(items, settings),
         page: safePage,
         limit: safeLimit,
         total,
@@ -290,8 +404,11 @@ app.get('/api/entries', requireAuth, async (req, res) => {
       });
     }
 
-    const entries = await entryQuery;
-    res.json(entries);
+    const [settings, entries] = await Promise.all([
+      settingsPromise,
+      entryQuery,
+    ]);
+    res.json(normalizeEntriesForResponse(entries, settings));
   } catch (err) {
     console.error('Fetch entries error:', err);
     res.status(500).json({ error: 'Failed to fetch entries' });
@@ -691,6 +808,17 @@ app.post('/api/import', requireAuth, async (req, res) => {
     }
     res.status(400).json({ error: 'Failed to import data: ' + err.message });
   }
+});
+
+app.use((req, res) => {
+  res.status(404).json({ error: 'Not found' });
+});
+
+app.use((err, req, res, next) => {
+  console.error('Unhandled API error:', err);
+  if (res.headersSent) return next(err);
+  const status = err.message === 'CORS origin not allowed' ? 403 : 500;
+  return res.status(status).json({ error: status === 403 ? err.message : 'Internal server error' });
 });
 
 app.listen(PORT, () => {

@@ -10,14 +10,16 @@ import {
   closeModal,
   confirmDialog,
   calculateEntryHours,
-  calculateOvertime,
+  calculateOvertimeForDate,
   calculateLate,
   calculateUndertime,
   fmtMinutes,
   ICONS,
   fmtTimeStr,
   requestRender,
+  formatOvertimeDuration,
 } from '../utils.js';
+import { getScheduledWorkWindow } from '../../shared/work-schedule.js';
 
 const PAGE_SIZE = 50;
 
@@ -87,9 +89,75 @@ function entryForm(entry = null) {
       <div class="form-row">
         <div class="form-group"><label>Remarks</label><input type="text" id="entry-remarks" value="${entry?.remarks || ''}" placeholder="Optional"></div>
       </div>
+      <div class="entry-derived-preview" id="entry-derived-preview"></div>
       <div class="form-group"><label>Activities / Tasks Done</label><textarea id="entry-activities" placeholder="What did you work on today?">${entry?.activities || ''}</textarea></div>
     </div>
     <div class="modal-footer"><button class="btn btn-ghost modal-cancel-btn">Cancel</button><button class="btn btn-primary" id="entry-save">${isEdit ? 'Save Changes' : 'Add Entry'}</button></div>
+`;
+}
+
+function collectEntryDraft() {
+  const status = document.getElementById('entry-status')?.value || 'present';
+  const date = document.getElementById('entry-date')?.value || getCurrentDate();
+  const amTimeIn = document.getElementById('entry-am-in')?.value || '';
+  const amTimeOut = document.getElementById('entry-am-out')?.value || '';
+  const pmTimeIn = document.getElementById('entry-pm-in')?.value || '';
+  const pmTimeOut = document.getElementById('entry-pm-out')?.value || '';
+
+  return {
+    status,
+    date,
+    isPresent: status === 'present',
+    amTimeIn,
+    amTimeOut,
+    pmTimeIn,
+    pmTimeOut,
+  };
+}
+
+function getEntryDraftDerived(draft) {
+  const schedule = getScheduledWorkWindow(draft.date, store.state.settings);
+  const entry = {
+    date: draft.date,
+    status: draft.status,
+    amTimeIn: draft.isPresent ? draft.amTimeIn : '',
+    amTimeOut: draft.isPresent ? draft.amTimeOut : '',
+    pmTimeIn: draft.isPresent ? draft.pmTimeIn : '',
+    pmTimeOut: draft.isPresent ? draft.pmTimeOut : '',
+  };
+  const hoursRendered = draft.isPresent ? calculateEntryHours(entry) : 0;
+
+  return {
+    hoursRendered,
+    overtimeHours: draft.isPresent ? calculateOvertimeForDate(draft.date, hoursRendered) : 0,
+    lateMinutes: draft.isPresent && draft.amTimeIn ? calculateLate(draft.amTimeIn, schedule.expectedTimeIn) : 0,
+    undertimeMinutes: draft.isPresent && draft.pmTimeOut ? calculateUndertime(draft.pmTimeOut, schedule.expectedTimeOut) : 0,
+    schedule,
+  };
+}
+
+function getEntryDraftWarning(draft) {
+  if (!draft.date) return 'Date is required.';
+  if (!draft.isPresent) return '';
+  if (!draft.amTimeIn && !draft.pmTimeIn) return 'At least one time in is required.';
+  if (draft.amTimeIn && draft.amTimeOut && draft.amTimeIn >= draft.amTimeOut) return 'AM Out must be after AM In.';
+  if (draft.pmTimeIn && draft.pmTimeOut && draft.pmTimeIn >= draft.pmTimeOut) return 'PM Out must be after PM In.';
+  return '';
+}
+
+function refreshEntryDerivedPreview() {
+  const preview = document.getElementById('entry-derived-preview');
+  if (!preview) return;
+
+  const draft = collectEntryDraft();
+  const derived = getEntryDraftDerived(draft);
+  const warning = getEntryDraftWarning(draft);
+  preview.innerHTML = `
+    <div><span>Hours</span><strong>${fmtHours(derived.hoursRendered)}</strong></div>
+    <div><span>OT</span><strong>${formatOvertimeDuration(derived.overtimeHours) || '0'}</strong></div>
+    <div><span>Late</span><strong>${fmtMinutes(derived.lateMinutes)}</strong></div>
+    <div><span>Undertime</span><strong>${fmtMinutes(derived.undertimeMinutes)}</strong></div>
+    ${warning ? `<p>${warning}</p>` : ''}
   `;
 }
 
@@ -143,6 +211,11 @@ function openEntryEditor(entry) {
   document.getElementById('entry-save').onclick = () => saveEntry(entry?.id || null);
   document.querySelector('.modal-close-btn').onclick = closeModal;
   document.querySelector('.modal-cancel-btn').onclick = closeModal;
+  ['entry-status', 'entry-date', 'entry-am-in', 'entry-am-out', 'entry-pm-in', 'entry-pm-out'].forEach(id => {
+    document.getElementById(id)?.addEventListener('input', refreshEntryDerivedPreview);
+    document.getElementById(id)?.addEventListener('change', refreshEntryDerivedPreview);
+  });
+  refreshEntryDerivedPreview();
 }
 
 function toggleSelectedDate(date, checked) {
@@ -211,31 +284,19 @@ function openTemplateManager() {
 }
 
 async function saveEntry(id = null) {
-  const status = document.getElementById('entry-status').value;
-  const date = document.getElementById('entry-date').value;
-  const amIn = document.getElementById('entry-am-in').value;
-  const amOut = document.getElementById('entry-am-out').value;
-  const pmIn = document.getElementById('entry-pm-in').value;
-  const pmOut = document.getElementById('entry-pm-out').value;
+  const draft = collectEntryDraft();
+  const { status, date } = draft;
+  const amIn = draft.amTimeIn;
+  const amOut = draft.amTimeOut;
+  const pmIn = draft.pmTimeIn;
+  const pmOut = draft.pmTimeOut;
   const remarks = document.getElementById('entry-remarks').value;
   const activities = document.getElementById('entry-activities').value;
-  const settings = store.state.settings;
-  const isPresent = status === 'present';
+  const isPresent = draft.isPresent;
+  const warning = getEntryDraftWarning(draft);
 
-  if (!date) {
-    toast('Date is required', 'error');
-    return;
-  }
-  if (isPresent && !amIn && !pmIn) {
-    toast('At least one time in is required', 'error');
-    return;
-  }
-  if (isPresent && amIn && amOut && amIn >= amOut) {
-    toast('AM Out must be after AM In', 'error');
-    return;
-  }
-  if (isPresent && pmIn && pmOut && pmIn >= pmOut) {
-    toast('PM Out must be after PM In', 'error');
+  if (warning) {
+    toast(warning, 'error');
     return;
   }
 
@@ -249,11 +310,11 @@ async function saveEntry(id = null) {
     remarks,
     activities,
   };
-  const hoursRendered = isPresent ? calculateEntryHours(entry) : 0;
-  entry.hoursRendered = hoursRendered;
-  entry.overtimeHours = isPresent ? calculateOvertime(hoursRendered) : 0;
-  entry.lateMinutes = isPresent && amIn ? calculateLate(amIn, settings.expectedTimeIn) : 0;
-  entry.undertimeMinutes = isPresent && pmOut ? calculateUndertime(pmOut, settings.expectedTimeOut) : 0;
+  const derived = getEntryDraftDerived(draft);
+  entry.hoursRendered = derived.hoursRendered;
+  entry.overtimeHours = derived.overtimeHours;
+  entry.lateMinutes = derived.lateMinutes;
+  entry.undertimeMinutes = derived.undertimeMinutes;
 
   try {
     if (id) {
@@ -452,7 +513,7 @@ function renderTableSection() {
         <td class="font-mono">${fmtTimeStr(entry.amTimeIn)}</td><td class="font-mono">${fmtTimeStr(entry.amTimeOut)}</td>
         <td class="font-mono">${fmtTimeStr(entry.pmTimeIn)}</td><td class="font-mono">${fmtTimeStr(entry.pmTimeOut)}</td>
         <td class="font-mono">${store.getEntryStatus(entry) === 'present' && (entry.amTimeOut || entry.pmTimeOut) ? fmtHours(entry.hoursRendered) : '--'}</td>
-        <td class="font-mono">${store.getEntryStatus(entry) === 'present' && entry.overtimeHours > 0 ? fmtHours(entry.overtimeHours) : '--'}</td>
+        <td class="font-mono">${store.getEntryStatus(entry) === 'present' ? (formatOvertimeDuration(calculateOvertimeForDate(entry.date, entry.hoursRendered), { blankZero: true }) || '--') : '--'}</td>
         <td class="font-mono">${store.getEntryStatus(entry) === 'present' && entry.lateMinutes > 0 ? fmtMinutes(entry.lateMinutes) : '--'}</td>
         <td><div class="table-actions">
           <button class="btn-icon btn-edit" data-id="${entry.id}" title="Edit">${ICONS.edit}</button>

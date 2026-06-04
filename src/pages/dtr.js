@@ -1,6 +1,6 @@
 import { store } from '../store.js';
-import { getDayName, getDaysInMonth, MONTHS, ICONS, fmtTimeStr, requestRender } from '../utils.js';
-import { getScheduledNonWorkingStatus } from '../../shared/work-schedule.js';
+import { MONTHS, ICONS, getDaysInMonth, requestRender } from '../utils.js';
+import { buildDtrSheetModel } from '../lib/dtr-sheet-model.js';
 
 let selYear = new Date().getFullYear();
 let selMonth = new Date().getMonth();
@@ -101,47 +101,30 @@ function renderHeader() {
 function renderSheetContent() {
   const entries = getVisibleEntries();
   const holidays = store.getHolidaysInMonth(selYear, selMonth);
-  const entriesByDate = new Map(entries.map(entry => [entry.date, entry]));
-  const holidaysByDate = new Map(holidays.map(holiday => [holiday.date, holiday]));
-  const daysInMonth = getDaysInMonth(selYear, selMonth);
-  const profile = store.state.profile;
-  const scheduleText = `${fmtTimeStr(store.state.settings.expectedTimeIn)} - ${fmtTimeStr(store.state.settings.expectedTimeOut)}`;
-  const totalHours = entries.reduce((sum, entry) => sum + ((store.getEntryStatus(entry) === 'present') ? (entry.hoursRendered || 0) : 0), 0);
-  const totalOvertime = entries.reduce((sum, entry) => sum + ((store.getEntryStatus(entry) === 'present') ? (entry.overtimeHours || 0) : 0), 0);
-  const daysWorked = entries.reduce((count, entry) => count + ((store.getEntryStatus(entry) === 'present' && (entry.amTimeOut || entry.pmTimeOut)) ? 1 : 0), 0);
+  const sheet = buildDtrSheetModel({
+    entries,
+    holidays,
+    month: selMonth,
+    year: selYear,
+    profile: store.state.profile,
+    settings: store.state.settings,
+    getEntryStatus: entry => store.getEntryStatus(entry),
+  });
+  const profile = sheet.profile;
 
-  const rows = [];
-  for (let day = 1; day <= daysInMonth; day++) {
-    const dateStr = `${selYear}-${String(selMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    const dayName = getDayName(dateStr);
-    const entry = entriesByDate.get(dateStr);
-    const holiday = holidaysByDate.get(dateStr);
-    const isWeekend = dayName === 'Sat' || dayName === 'Sun';
-    const derivedStatus = entry
-      ? store.getEntryStatus(entry)
-      : (holiday
-        ? (holiday.type === 'holiday' ? 'holiday' : holiday.type === 'vacation_leave' ? 'vacation' : 'leave')
-        : getScheduledNonWorkingStatus(dateStr));
-    const holidayLabel = derivedStatus ? derivedStatus.replace('_', ' ').replace(/\b\w/g, char => char.toUpperCase()) : '';
-    const isPresent = !derivedStatus || derivedStatus === 'present';
-    const activityText = entry?.activities || holiday?.name || '';
-    const remarksText = entry?.remarks || holidayLabel || '';
-
-    rows.push(`
-      <tr style="${isWeekend || holiday || derivedStatus === 'no_ojt' ? 'opacity:0.5' : ''}">
-        <td>${day}</td>
-        <td>${dayName}</td>
-        <td class="font-mono">${isPresent ? fmtTimeStr(entry?.amTimeIn) : ''}</td>
-        <td class="font-mono">${isPresent ? fmtTimeStr(entry?.amTimeOut) : ''}</td>
-        <td class="font-mono">${isPresent ? fmtTimeStr(entry?.pmTimeIn) : ''}</td>
-        <td class="font-mono">${isPresent ? fmtTimeStr(entry?.pmTimeOut) : ''}</td>
-        <td class="font-mono">${isPresent && (entry?.amTimeOut || entry?.pmTimeOut) ? entry.hoursRendered.toFixed(2) : ''}</td>
-        <td class="font-mono">${isPresent && entry?.overtimeHours > 0 ? entry.overtimeHours.toFixed(2) : ''}</td>
-        <td style="font-size:0.8rem;color:var(--text-muted)">${activityText}</td>
-        <td style="font-size:0.8rem;color:var(--text-muted)">${remarksText}</td>
-      </tr>
-    `);
-  }
+  const rows = sheet.rows.map(row => `
+    <tr class="${row.isMuted ? 'dtr-row-muted' : ''}">
+      <td>${row.day}</td>
+      <td>${row.dayName}</td>
+      <td class="font-mono">${row.amTimeIn}</td>
+      <td class="font-mono">${row.amTimeOut}</td>
+      <td class="font-mono">${row.pmTimeIn}</td>
+      <td class="font-mono">${row.pmTimeOut}</td>
+      <td class="font-mono">${row.hoursDisplay}</td>
+      <td class="font-mono">${row.overtimeDisplay}</td>
+      <td class="dtr-text-cell">${row.remarks}</td>
+    </tr>
+  `);
 
   return `
     ${monthLoading ? '<div class="card mb-4"><div class="empty-state"><h4>Loading month records...</h4></div></div>' : ''}
@@ -156,14 +139,25 @@ function renderSheetContent() {
       <div class="dtr-info">
         <div class="info-field"><span class="info-label">Name:</span><span class="info-value">${profile.name || '_______________'}</span></div>
         <div class="info-field"><span class="info-label">Department:</span><span class="info-value">${profile.department || '_______________'}</span></div>
-        <div class="info-field"><span class="info-label">Month/Year:</span><span class="info-value">${MONTHS[selMonth]} ${selYear}</span></div>
+        <div class="info-field"><span class="info-label">Month/Year:</span><span class="info-value">${sheet.monthLabel}</span></div>
         <div class="info-field"><span class="info-label">Supervisor:</span><span class="info-value">${profile.supervisor || '_______________'}</span></div>
         <div class="info-field"><span class="info-label">Position:</span><span class="info-value">${profile.position || 'OJT Trainee'}</span></div>
-        <div class="info-field"><span class="info-label">Schedule:</span><span class="info-value">${scheduleText}</span></div>
+        <div class="info-field"><span class="info-label">Schedule:</span><span class="info-value">${sheet.scheduleText}</span></div>
       </div>
 
       <div class="table-wrap">
         <table class="dtr-table">
+          <colgroup>
+            <col class="dtr-col-day-number">
+            <col class="dtr-col-day-name">
+            <col class="dtr-col-time">
+            <col class="dtr-col-time">
+            <col class="dtr-col-time">
+            <col class="dtr-col-time">
+            <col class="dtr-col-hours">
+            <col class="dtr-col-ot">
+            <col class="dtr-col-remarks">
+          </colgroup>
           <thead>
             <tr>
               <th rowspan="2">Day</th>
@@ -172,7 +166,6 @@ function renderSheetContent() {
               <th colspan="2" style="border-bottom:1px solid var(--border)">P.M.</th>
               <th rowspan="2">Hours</th>
               <th rowspan="2">OT</th>
-              <th rowspan="2">Activities</th>
               <th rowspan="2">Remarks</th>
             </tr>
             <tr>
@@ -185,9 +178,9 @@ function renderSheetContent() {
       </div>
 
       <div class="dtr-totals">
-        <div>Total Hours: <span>${totalHours.toFixed(2)}</span></div>
-        <div>Overtime: <span>${totalOvertime.toFixed(2)}</span></div>
-        <div>Days Worked: <span>${daysWorked}</span></div>
+        <div>Month Total Hours: <span>${sheet.totals.totalHoursDisplay}</span></div>
+        <div>Overtime: <span>${sheet.totals.totalOvertimeDisplay}</span></div>
+        <div>Days Worked: <span>${sheet.totals.daysWorked}</span></div>
       </div>
 
       <div class="dtr-cert">

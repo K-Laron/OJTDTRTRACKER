@@ -1,9 +1,22 @@
 import { store } from '../store.js';
 import { fmtHours, fmtMinutes, fmtDate, getDayName, getCurrentDate, getCurrentTime,
-  calculateEntryHours, calculateOvertime, calculateLate, calculateUndertime,
+  calculateEntryHours, calculateOvertimeForDate, calculateLate, calculateUndertime,
   toast, ICONS, fmtTimeStr } from '../utils.js';
+import { getScheduledWorkWindow } from '../../shared/work-schedule.js';
 
 let clockIntervalId = null;
+
+function formatForecastDate(value) {
+  return value ? fmtDate(value) : '--';
+}
+
+function renderForecastSuggestions(forecast) {
+  const suggestions = Array.isArray(forecast?.suggestions) ? forecast.suggestions.slice(0, 2) : [];
+  if (!suggestions.length) return '';
+  return suggestions
+    .map(message => `<div class="detail-row"><span class="detail-label">Suggestion</span><span class="detail-value">${message}</span></div>`)
+    .join('');
+}
 
 export function render() {
   const progress = store.getProgress();
@@ -37,12 +50,15 @@ export function render() {
   // Completion estimate
   const forecast = store.getCompletionForecast();
   const estHtml = forecast
-    ? `<div class="detail-row"><span class="detail-label">Avg Hours/Day</span><span class="detail-value">${forecast.avgPerDay.toFixed(1)}h</span></div>
+    ? `<div class="detail-row"><span class="detail-label">Expected Avg/Day</span><span class="detail-value">${forecast.avgPerDay.toFixed(1)}h</span></div>
        <div class="detail-row"><span class="detail-label">Working Days Left</span><span class="detail-value">${forecast.workingDaysRemaining}</span></div>
        <div class="detail-row"><span class="detail-label">Needed Avg/Day</span><span class="detail-value">${forecast.neededAvgHoursPerDay.toFixed(1)}h</span></div>
-       <div class="detail-row"><span class="detail-label">Est. Completion</span><span class="detail-value text-primary">${fmtDate(forecast.estimatedDate)}</span></div>
-       <div class="detail-row"><span class="detail-label">Forecast Note</span><span class="detail-value">${forecast.excludedDates.length ? `${forecast.excludedDates.length} non-working day(s) excluded` : 'No excluded future workdays'}</span></div>`
-    : `<div class="detail-row"><span class="detail-label">Est. Completion</span><span class="detail-value text-muted">Need present-day data</span></div>`;
+       <div class="detail-row"><span class="detail-label">Est. Completion</span><span class="detail-value text-primary">${formatForecastDate(forecast.estimatedDate)}</span></div>
+       <div class="detail-row"><span class="detail-label">Date Range</span><span class="detail-value">${formatForecastDate(forecast.scenarios?.optimistic?.estimatedDate)} - ${formatForecastDate(forecast.scenarios?.conservative?.estimatedDate)}</span></div>
+       <div class="detail-row"><span class="detail-label">Confidence</span><span class="detail-value">${forecast.confidence || 'medium'}</span></div>
+       <div class="detail-row"><span class="detail-label">Forecast Note</span><span class="detail-value">${forecast.excludedDates.length ? `${forecast.excludedDates.length} non-working day(s) excluded` : 'No excluded future workdays'}</span></div>
+       ${renderForecastSuggestions(forecast)}`
+    : `<div class="detail-row"><span class="detail-label">Est. Completion</span><span class="detail-value text-muted">Need complete present-day data</span></div>`;
 
   // Weekly progress
   const weekHrs = store.getCurrentWeekHours();
@@ -78,13 +94,13 @@ export function render() {
             </svg>
             <div class="progress-ring-center">
               <span class="progress-ring-value">${progress.toFixed(1)}%</span>
-              <span class="progress-ring-label">Complete</span>
+              <span class="progress-ring-label">All-Time Complete</span>
             </div>
           </div>
           <div class="progress-details">
-            <div class="detail-row"><span class="detail-label">Hours Rendered</span><span class="detail-value">${fmtHours(totalHrs)}</span></div>
+            <div class="detail-row"><span class="detail-label">All-Time Hours</span><span class="detail-value">${totalHrs.toFixed(2)}h</span></div>
             <div class="detail-row"><span class="detail-label">Required Hours</span><span class="detail-value">${store.getRequiredHours()}h</span></div>
-            <div class="detail-row"><span class="detail-label">Remaining</span><span class="detail-value">${fmtHours(remaining)}</span></div>
+            <div class="detail-row"><span class="detail-label">Remaining</span><span class="detail-value">${remaining.toFixed(2)}h</span></div>
             ${estHtml}
           </div>
         </div>
@@ -101,7 +117,7 @@ export function render() {
           <div class="progress-details" style="font-size:0.9rem">
             <div class="detail-row"><span class="detail-label">Present</span><span class="detail-value text-success">${summary.present}</span></div>
             <div class="detail-row"><span class="detail-label">Late</span><span class="detail-value text-warning">${summary.late}</span></div>
-            <div class="detail-row"><span class="detail-label">Overtime</span><span class="detail-value text-primary">${fmtHours(overtime)}</span></div>
+            <div class="detail-row"><span class="detail-label">Overtime</span><span class="detail-value text-primary">${overtime.toFixed(2)}h</span></div>
             <div class="detail-row"><span class="detail-label">On Leave</span><span class="detail-value">${summary.onLeave}</span></div>
           </div>
         </div>
@@ -110,7 +126,7 @@ export function render() {
 
     <!-- Stats Grid -->
     <div class="card-grid card-grid-4 mb-6">
-      <div class="stat-card primary"><div class="stat-label">Total Hours</div><div class="stat-value">${totalHrs.toFixed(1)}</div><div class="stat-sub">of ${store.getRequiredHours()}h required</div></div>
+      <div class="stat-card primary"><div class="stat-label">All-Time Hours</div><div class="stat-value">${totalHrs.toFixed(2)}</div><div class="stat-sub">of ${store.getRequiredHours()}h required</div></div>
       <div class="stat-card accent"><div class="stat-label">Remaining</div><div class="stat-value">${remaining.toFixed(1)}</div><div class="stat-sub">hours left</div></div>
       <div class="stat-card warning"><div class="stat-label">Overtime</div><div class="stat-value">${overtime.toFixed(1)}</div><div class="stat-sub">total OT hours</div></div>
       <div class="stat-card info"><div class="stat-label">Days Attended</div><div class="stat-value">${days}</div><div class="stat-sub">working days</div></div>
@@ -145,26 +161,27 @@ export function render() {
 }
 
 export function mount() {
-  const s = store.state.settings;
   const btn = document.getElementById('btn-clock');
   if (btn) {
     btn.addEventListener('click', async () => {
       try {
         const today = getCurrentDate(), now = getCurrentTime();
+        const settings = store.state.settings;
+        const schedule = getScheduledWorkWindow(today, settings);
         const { phase, entry } = store.getClockPhase(today);
         if (phase === 0) {
-          await store.addEntry({ date: today, status: 'present', amTimeIn: now, amTimeOut: '', pmTimeIn: '', pmTimeOut: '', hoursRendered: 0, overtimeHours: 0, lateMinutes: calculateLate(now, s.expectedTimeIn), undertimeMinutes: 0, remarks: '', activities: '' });
+          await store.addEntry({ date: today, status: 'present', amTimeIn: now, amTimeOut: '', pmTimeIn: '', pmTimeOut: '', hoursRendered: 0, overtimeHours: 0, lateMinutes: calculateLate(now, schedule.expectedTimeIn), undertimeMinutes: 0, remarks: '', activities: '' });
           toast('AM Clocked In!', 'success');
         } else if (phase === 1) {
           const hrs = calculateEntryHours({ ...entry, amTimeOut: now });
-          await store.updateEntry(entry.id, { amTimeOut: now, hoursRendered: hrs, overtimeHours: calculateOvertime(hrs) });
+          await store.updateEntry(entry.id, { amTimeOut: now, hoursRendered: hrs, overtimeHours: calculateOvertimeForDate(today, hrs) });
           toast('AM Clocked Out!', 'success');
         } else if (phase === 2) {
           await store.updateEntry(entry.id, { pmTimeIn: now });
           toast('PM Clocked In!', 'success');
         } else if (phase === 3) {
           const hrs = calculateEntryHours({ ...entry, pmTimeOut: now });
-          await store.updateEntry(entry.id, { pmTimeOut: now, hoursRendered: hrs, overtimeHours: calculateOvertime(hrs), undertimeMinutes: calculateUndertime(now, s.expectedTimeOut) });
+          await store.updateEntry(entry.id, { pmTimeOut: now, hoursRendered: hrs, overtimeHours: calculateOvertimeForDate(today, hrs), undertimeMinutes: calculateUndertime(now, schedule.expectedTimeOut) });
           toast('PM Clocked Out! ' + fmtHours(hrs) + ' recorded.', 'success');
         }
       } catch (err) {

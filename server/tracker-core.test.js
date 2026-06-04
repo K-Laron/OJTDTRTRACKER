@@ -35,7 +35,7 @@ test('sanitizeEntry recalculates derived fields from raw times', () => {
 test('sanitizeEntry merges partial updates with the existing entry', () => {
   const existing = {
     id: 'entry-2',
-    date: '2026-03-21',
+    date: '2026-03-06',
     status: 'present',
     amTimeIn: '08:00',
     amTimeOut: '12:00',
@@ -54,6 +54,34 @@ test('sanitizeEntry merges partial updates with the existing entry', () => {
   assert.equal(updated.overtimeHours, 1);
   assert.equal(updated.pmTimeIn, '13:00');
   assert.equal(updated.pmTimeOut, '18:00');
+});
+
+test('sanitizeEntry treats 10 hours as regular time from 2026-03-09 onward', () => {
+  const entry = sanitizeEntry({
+    id: 'entry-4day',
+    date: '2026-03-09',
+    status: 'present',
+    amTimeIn: '07:00',
+    amTimeOut: '12:00',
+    pmTimeIn: '13:00',
+    pmTimeOut: '18:00',
+  }, DEFAULT_SETTINGS);
+
+  assert.equal(entry.hoursRendered, 10);
+  assert.equal(entry.overtimeHours, 0);
+
+  const withOvertime = sanitizeEntry({
+    id: 'entry-4day-ot',
+    date: '2026-03-09',
+    status: 'present',
+    amTimeIn: '07:00',
+    amTimeOut: '12:00',
+    pmTimeIn: '13:00',
+    pmTimeOut: '19:00',
+  }, DEFAULT_SETTINGS);
+
+  assert.equal(withOvertime.hoursRendered, 11);
+  assert.equal(withOvertime.overtimeHours, 1);
 });
 
 test('sanitizeImportPayload rejects duplicate ids and duplicate holiday dates', () => {
@@ -110,6 +138,21 @@ test('sanitizeImportPayload recalculates imported entries using imported setting
   assert.equal(payload.entries[0].lateMinutes, 15);
   assert.equal(payload.entries[0].undertimeMinutes, 0);
   assert.equal(payload.settings.expectedTimeIn, '09:00');
+});
+
+test('sanitizeEntry uses the historical split schedule for late calculations before 2026-03-09', () => {
+  const entry = sanitizeEntry({
+    id: 'entry-historical-schedule',
+    date: '2026-02-02',
+    status: 'present',
+    amTimeIn: '07:45',
+    amTimeOut: '11:30',
+    pmTimeIn: '13:00',
+    pmTimeOut: '17:00',
+  }, DEFAULT_SETTINGS);
+
+  assert.equal(entry.lateMinutes, 15);
+  assert.equal(entry.undertimeMinutes, 0);
 });
 
 test('entriesConflict only flags meaningful user-facing changes', () => {
@@ -310,4 +353,77 @@ test('calculateCompletionForecast skips Fridays after the four-day workweek star
   assert.equal(forecast.remainingHours, 8);
   assert.equal(forecast.workingDaysRemaining, 1);
   assert.equal(forecast.estimatedDate, '2026-03-16');
+});
+
+test('calculateCompletionForecast returns weighted scenarios and suggestions', () => {
+  const forecast = calculateCompletionForecast({
+    today: '2026-04-06',
+    requiredHours: 100,
+    entries: [
+      { date: '2026-03-23', status: 'present', amTimeIn: '08:00', amTimeOut: '12:00', hoursRendered: 4 },
+      { date: '2026-03-24', status: 'present', amTimeIn: '08:00', amTimeOut: '13:00', hoursRendered: 5 },
+      { date: '2026-03-25', status: 'present', amTimeIn: '08:00', amTimeOut: '14:00', hoursRendered: 6 },
+      { date: '2026-03-26', status: 'present', amTimeIn: '08:00', amTimeOut: '15:00', hoursRendered: 7 },
+      { date: '2026-03-30', status: 'present', amTimeIn: '08:00', amTimeOut: '16:00', hoursRendered: 8 },
+      { date: '2026-03-31', status: 'present', amTimeIn: '08:00', amTimeOut: '16:00', hoursRendered: 8 },
+      { date: '2026-04-01', status: 'present', amTimeIn: '08:00', amTimeOut: '16:00', hoursRendered: 8 },
+      { date: '2026-04-02', status: 'present', amTimeIn: '08:00', amTimeOut: '16:00', hoursRendered: 8 },
+      { date: '2026-04-06', status: 'present', amTimeIn: '08:00', amTimeOut: '16:00', hoursRendered: 8 },
+      { date: '2026-04-07', status: 'leave', hoursRendered: 0 },
+    ],
+  });
+
+  assert.equal(forecast.totalHours, 62);
+  assert.equal(forecast.remainingHours, 38);
+  assert.equal(Number(forecast.lifetimeAvgPerDay.toFixed(2)), 6.89);
+  assert.equal(Number(forecast.recentAvgPerDay.toFixed(2)), 8);
+  assert.equal(Number(forecast.weightedAvgPerDay.toFixed(2)), 7.63);
+  assert.equal(Number(forecast.avgPerDay.toFixed(2)), 7.63);
+  assert.equal(forecast.workingDaysRemaining, 5);
+  assert.equal(forecast.estimatedDate, '2026-04-15');
+  assert.equal(forecast.scenarios.conservative.estimatedDate, '2026-04-16');
+  assert.equal(forecast.scenarios.expected.estimatedDate, '2026-04-15');
+  assert.equal(forecast.scenarios.optimistic.estimatedDate, '2026-04-15');
+  assert.equal(forecast.confidence, 'high');
+  assert.deepEqual(forecast.excludedDates, [{ date: '2026-04-07', status: 'leave' }]);
+  assert.ok(forecast.suggestions.some(message => message.includes('Recent pace is faster')));
+  assert.ok(forecast.suggestions.some(message => message.includes('1 known non-working day')));
+});
+
+test('calculateCompletionForecast excludes incomplete present days from averages and lowers confidence', () => {
+  const forecast = calculateCompletionForecast({
+    today: '2026-04-06',
+    requiredHours: 40,
+    entries: [
+      { date: '2026-04-01', status: 'present', amTimeIn: '08:00', amTimeOut: '12:00', hoursRendered: 4 },
+      { date: '2026-04-02', status: 'present', amTimeIn: '08:00', hoursRendered: 6 },
+      { date: '2026-04-06', status: 'present', pmTimeIn: '13:00', pmTimeOut: '17:00', hoursRendered: 4 },
+    ],
+  });
+
+  assert.equal(forecast.totalHours, 14);
+  assert.equal(forecast.lifetimeAvgPerDay, 4);
+  assert.equal(forecast.recentAvgPerDay, 4);
+  assert.equal(forecast.confidence, 'low');
+  assert.ok(forecast.confidenceReasons.includes('Only 2 complete worked day(s) available.'));
+  assert.ok(forecast.confidenceReasons.includes('1 present day(s) have rendered hours but incomplete clock pairs.'));
+  assert.ok(forecast.suggestions.some(message => message.includes('Complete clock pairs')));
+});
+
+test('calculateCompletionForecast returns all scenario dates as today when required hours are complete', () => {
+  const forecast = calculateCompletionForecast({
+    today: '2026-04-06',
+    requiredHours: 8,
+    entries: [
+      { date: '2026-04-06', status: 'present', amTimeIn: '08:00', amTimeOut: '16:00', hoursRendered: 8 },
+    ],
+  });
+
+  assert.equal(forecast.remainingHours, 0);
+  assert.equal(forecast.workingDaysRemaining, 0);
+  assert.equal(forecast.estimatedDate, '2026-04-06');
+  assert.equal(forecast.scenarios.conservative.estimatedDate, '2026-04-06');
+  assert.equal(forecast.scenarios.expected.estimatedDate, '2026-04-06');
+  assert.equal(forecast.scenarios.optimistic.estimatedDate, '2026-04-06');
+  assert.deepEqual(forecast.suggestions, ['Required OJT hours are complete.']);
 });

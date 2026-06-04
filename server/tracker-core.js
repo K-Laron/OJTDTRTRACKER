@@ -1,4 +1,10 @@
-import { isScheduledWorkday } from '../shared/work-schedule.js';
+import { getScheduledWorkWindow, isScheduledWorkday } from '../shared/work-schedule.js';
+import {
+  calculateDtrEntryHours,
+  calculateDtrHours,
+  calculateDtrOvertime,
+  parseDtrTime,
+} from '../shared/dtr-rules.js';
 
 export const DEFAULT_SETTINGS = {
   requiredHours: 486,
@@ -15,11 +21,14 @@ export const DEFAULT_SETTINGS = {
 };
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const TIME_RE = /^\d{2}:\d{2}$/;
 const HOLIDAY_TYPES = new Set(['holiday', 'sick_leave', 'vacation_leave']);
 const HOLIDAY_SOURCES = new Set(['manual', 'public_api']);
 export const ENTRY_STATUSES = new Set(['present', 'leave', 'vacation', 'holiday', 'no_ojt', 'absent']);
 const ENTRY_EDITABLE_FIELDS = ['date', 'status', 'amTimeIn', 'amTimeOut', 'pmTimeIn', 'pmTimeOut', 'remarks', 'activities'];
+const RECENT_FORECAST_DAYS = 5;
+const MAX_FORECAST_DAYS = 366 * 3;
+const REALISTIC_MAX_HOURS_PER_DAY = 8;
+const TREND_DELTA_THRESHOLD_HOURS = 0.75;
 
 function toNumber(value, fallback) {
   const num = Number(value);
@@ -34,29 +43,23 @@ function toLocalDateString(date = new Date()) {
 }
 
 export function parseTime(value) {
-  if (!value) return null;
-  if (!TIME_RE.test(value)) return null;
-  const [hours, minutes] = value.split(':').map(Number);
-  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
-  return (hours * 60) + minutes;
+  return parseDtrTime(value);
 }
 
 export function calculateHours(timeIn, timeOut, breakMins = 0) {
-  const start = parseTime(timeIn);
-  const end = parseTime(timeOut);
-  if (start == null || end == null) return 0;
-  return Math.max(0, (end - start - breakMins) / 60);
+  return calculateDtrHours(timeIn, timeOut, breakMins);
 }
 
 export function calculateEntryHours(entry) {
-  let total = 0;
-  if (entry.amTimeIn && entry.amTimeOut) total += calculateHours(entry.amTimeIn, entry.amTimeOut);
-  if (entry.pmTimeIn && entry.pmTimeOut) total += calculateHours(entry.pmTimeIn, entry.pmTimeOut);
-  return total;
+  return calculateDtrEntryHours(entry);
 }
 
 export function calculateOvertime(hours, threshold = 8) {
   return Math.max(0, hours - threshold);
+}
+
+export function calculateOvertimeForDate(date, hours) {
+  return calculateDtrOvertime(date, hours);
 }
 
 export function calculateLate(timeIn, expected) {
@@ -310,62 +313,89 @@ export function sanitizeEntry(input = {}, settings = DEFAULT_SETTINGS, { existin
   };
 
   const effectiveSettings = normalizeSettings(settings);
+  const schedule = getScheduledWorkWindow(date, effectiveSettings);
   const hoursRendered = isPresentStatus(status) ? calculateEntryHours(entry) : 0;
 
   return {
     ...entry,
     hoursRendered,
-    overtimeHours: isPresentStatus(status) ? calculateOvertime(hoursRendered) : 0,
-    lateMinutes: isPresentStatus(status) && amTimeIn ? calculateLate(amTimeIn, effectiveSettings.expectedTimeIn) : 0,
-    undertimeMinutes: isPresentStatus(status) && pmTimeOut ? calculateUndertime(pmTimeOut, effectiveSettings.expectedTimeOut) : 0,
+    overtimeHours: isPresentStatus(status) ? calculateOvertimeForDate(date, hoursRendered) : 0,
+    lateMinutes: isPresentStatus(status) && amTimeIn ? calculateLate(amTimeIn, schedule.expectedTimeIn) : 0,
+    undertimeMinutes: isPresentStatus(status) && pmTimeOut ? calculateUndertime(pmTimeOut, schedule.expectedTimeOut) : 0,
   };
 }
 
-export function calculateCompletionForecast({ today, requiredHours, entries = [] } = {}) {
-  const normalizedToday = assertDate(today || toLocalDateString(new Date()), 'Forecast date');
-  const presentEntries = entries
-    .map(entry => ({
-      ...entry,
-      status: normalizeStatus(entry?.status, (entry?.amTimeIn || entry?.pmTimeIn || entry?.hoursRendered) ? 'present' : 'absent'),
-      hoursRendered: Number(entry?.hoursRendered) || 0,
-    }))
-    .filter(entry => entry.status === 'present' && entry.hoursRendered > 0);
+function hasCompleteWorkedClockPair(entry = {}) {
+  if (entry.amTimeIn && entry.amTimeOut) return true;
+  if (entry.pmTimeIn && entry.pmTimeOut) return true;
+  if (!entry.amTimeIn && !entry.amTimeOut && !entry.pmTimeIn && !entry.pmTimeOut) return true;
+  return false;
+}
 
-  if (!presentEntries.length) return null;
+function normalizeForecastEntry(entry = {}) {
+  const status = normalizeStatus(
+    entry?.status,
+    (entry?.amTimeIn || entry?.pmTimeIn || entry?.hoursRendered) ? 'present' : 'absent'
+  );
+  const hoursRendered = Math.max(0, Number(entry?.hoursRendered) || 0);
+  return {
+    ...entry,
+    date: entry?.date || '',
+    status,
+    hoursRendered,
+    isCompleteWorkedDay: status === 'present' && hoursRendered > 0 && hasCompleteWorkedClockPair(entry),
+    isIncompleteWorkedDay: status === 'present' && hoursRendered > 0 && !hasCompleteWorkedClockPair(entry),
+  };
+}
 
-  const totalHours = presentEntries.reduce((sum, entry) => sum + entry.hoursRendered, 0);
-  const avgPerDay = totalHours / presentEntries.length;
-  if (avgPerDay <= 0) return null;
+function averageHours(entries = []) {
+  if (!entries.length) return 0;
+  return entries.reduce((sum, entry) => sum + entry.hoursRendered, 0) / entries.length;
+}
 
-  const remainingHours = Math.max(0, Number(requiredHours || 0) - totalHours);
-  if (remainingHours === 0) {
-    return {
-      avgPerDay,
-      remainingHours,
-      workingDaysRemaining: 0,
-      neededAvgHoursPerDay: 0,
-      estimatedDate: normalizedToday,
-      excludedDates: [],
-    };
-  }
+function weightedAverageHours(entries = []) {
+  if (!entries.length) return 0;
+  const lifetimeAvgPerDay = averageHours(entries);
+  const recentAvgPerDay = averageHours(entries.slice(-RECENT_FORECAST_DAYS));
+  return ((recentAvgPerDay * 2) + lifetimeAvgPerDay) / 3;
+}
 
-  const statusesByDate = new Map(entries.map(entry => [
-    entry.date,
-    normalizeStatus(entry?.status, (entry?.amTimeIn || entry?.pmTimeIn || entry?.hoursRendered) ? 'present' : 'absent'),
-  ]));
-  const workingDaysRemaining = Math.ceil(remainingHours / avgPerDay);
+function buildStatusMap(entries = [], holidays = []) {
+  const statusesByDate = new Map();
+
+  entries.forEach(entry => {
+    if (!entry?.date) return;
+    statusesByDate.set(entry.date, normalizeForecastEntry(entry).status);
+  });
+
+  holidays.forEach(holiday => {
+    if (!holiday?.date || statusesByDate.has(holiday.date)) return;
+    const status = holiday.type === 'holiday'
+      ? 'holiday'
+      : holiday.type === 'vacation_leave'
+        ? 'vacation'
+        : 'leave';
+    statusesByDate.set(holiday.date, status);
+  });
+
+  return statusesByDate;
+}
+
+function projectForecastScenario({ label, avgPerDay, remainingHours, today, statusesByDate }) {
+  const safeAvg = Math.max(0, Number(avgPerDay) || 0);
+  const workingDaysRemaining = safeAvg > 0 ? Math.ceil(remainingHours / safeAvg) : 0;
   const excludedDates = [];
-  const cursor = new Date(`${normalizedToday}T00:00:00`);
+  const cursor = new Date(`${today}T00:00:00`);
   let countedDays = 0;
+  let guard = 0;
 
-  while (countedDays < workingDaysRemaining) {
+  while (countedDays < workingDaysRemaining && guard < MAX_FORECAST_DAYS) {
+    guard += 1;
     cursor.setDate(cursor.getDate() + 1);
     const isoDate = toLocalDateString(cursor);
     const status = statusesByDate.get(isoDate) || '';
 
-    if (!isScheduledWorkday(isoDate)) {
-      continue;
-    }
+    if (!isScheduledWorkday(isoDate)) continue;
     if (isExcludedWorkdayStatus(status)) {
       excludedDates.push({ date: isoDate, status });
       continue;
@@ -374,12 +404,186 @@ export function calculateCompletionForecast({ today, requiredHours, entries = []
   }
 
   return {
-    avgPerDay,
-    remainingHours,
+    label,
+    avgPerDay: safeAvg,
     workingDaysRemaining,
-    neededAvgHoursPerDay: remainingHours / workingDaysRemaining,
-    estimatedDate: toLocalDateString(cursor),
+    neededAvgHoursPerDay: workingDaysRemaining > 0 ? remainingHours / workingDaysRemaining : 0,
+    estimatedDate: workingDaysRemaining === 0 ? today : toLocalDateString(cursor),
     excludedDates,
+  };
+}
+
+function getForecastConfidence({ completeCount, incompleteCount, lifetimeAvgPerDay, recentAvgPerDay }) {
+  const confidenceReasons = [];
+  let confidence = 'high';
+
+  if (completeCount < 3) {
+    confidence = 'low';
+    confidenceReasons.push(`Only ${completeCount} complete worked day(s) available.`);
+  } else if (completeCount < RECENT_FORECAST_DAYS) {
+    confidence = 'medium';
+    confidenceReasons.push(`Only ${completeCount} complete worked day(s) available for trend weighting.`);
+  }
+
+  if (incompleteCount > 0) {
+    confidence = confidence === 'high' ? 'medium' : confidence;
+    confidenceReasons.push(`${incompleteCount} present day(s) have rendered hours but incomplete clock pairs.`);
+  }
+
+  if (Math.abs(recentAvgPerDay - lifetimeAvgPerDay) >= TREND_DELTA_THRESHOLD_HOURS) {
+    confidenceReasons.push('Recent pace differs from the full-history average.');
+  }
+
+  if (!confidenceReasons.length) {
+    confidenceReasons.push('Forecast is based on complete worked days with a stable recent trend.');
+  }
+
+  return { confidence, confidenceReasons };
+}
+
+function buildForecastSuggestions({ incompleteCount, lifetimeAvgPerDay, recentAvgPerDay, expectedScenario, excludedCount }) {
+  const suggestions = [];
+
+  if (incompleteCount > 0) {
+    suggestions.push(`Complete clock pairs for ${incompleteCount} present day(s) to improve forecast accuracy.`);
+  }
+
+  if (recentAvgPerDay - lifetimeAvgPerDay >= TREND_DELTA_THRESHOLD_HOURS) {
+    suggestions.push('Recent pace is faster than your full-history average, so the expected date was pulled earlier.');
+  } else if (lifetimeAvgPerDay - recentAvgPerDay >= TREND_DELTA_THRESHOLD_HOURS) {
+    suggestions.push('Recent pace is slower than your full-history average, so the expected date was pushed later.');
+  }
+
+  if (excludedCount > 0) {
+    suggestions.push(`${excludedCount} known non-working day(s) were excluded from the forecast.`);
+  }
+
+  if (expectedScenario.workingDaysRemaining > 0) {
+    suggestions.push(`Keep about ${expectedScenario.neededAvgHoursPerDay.toFixed(1)}h per working day to hit the expected date.`);
+  }
+
+  return suggestions.length ? suggestions : ['Current records are enough for a stable completion estimate.'];
+}
+
+export function calculateCompletionForecast({ today, requiredHours, entries = [], holidays = [] } = {}) {
+  const normalizedToday = assertDate(today || toLocalDateString(new Date()), 'Forecast date');
+  const forecastEntries = entries.map(normalizeForecastEntry);
+  const completeWorkedEntries = forecastEntries
+    .filter(entry => entry.isCompleteWorkedDay)
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const incompleteWorkedEntries = forecastEntries.filter(entry => entry.isIncompleteWorkedDay);
+
+  if (!completeWorkedEntries.length) return null;
+
+  const totalHours = forecastEntries
+    .filter(entry => entry.status === 'present')
+    .reduce((sum, entry) => sum + entry.hoursRendered, 0);
+  const completeTotalHours = completeWorkedEntries.reduce((sum, entry) => sum + entry.hoursRendered, 0);
+  const lifetimeAvgPerDay = averageHours(completeWorkedEntries);
+  const recentAvgPerDay = averageHours(completeWorkedEntries.slice(-RECENT_FORECAST_DAYS));
+  const weightedAvgPerDay = weightedAverageHours(completeWorkedEntries);
+  const avgPerDay = weightedAvgPerDay;
+
+  if (avgPerDay <= 0) return null;
+
+  const remainingHours = Math.max(0, Number(requiredHours || 0) - totalHours);
+  const statusesByDate = buildStatusMap(forecastEntries, holidays);
+
+  if (remainingHours === 0) {
+    const scenario = {
+      label: 'Expected',
+      avgPerDay,
+      workingDaysRemaining: 0,
+      neededAvgHoursPerDay: 0,
+      estimatedDate: normalizedToday,
+      excludedDates: [],
+    };
+    return {
+      totalHours,
+      completeTotalHours,
+      lifetimeAvgPerDay,
+      recentAvgPerDay,
+      weightedAvgPerDay,
+      avgPerDay,
+      remainingHours,
+      workingDaysRemaining: 0,
+      neededAvgHoursPerDay: 0,
+      estimatedDate: normalizedToday,
+      excludedDates: [],
+      confidence: completeWorkedEntries.length < 3 ? 'low' : 'high',
+      confidenceReasons: completeWorkedEntries.length < 3
+        ? [`Only ${completeWorkedEntries.length} complete worked day(s) available.`]
+        : ['Required hours are complete.'],
+      suggestions: ['Required OJT hours are complete.'],
+      scenarios: {
+        conservative: { ...scenario, label: 'Conservative' },
+        expected: scenario,
+        optimistic: { ...scenario, label: 'Optimistic' },
+      },
+    };
+  }
+
+  const conservativeAvgPerDay = Math.max(0.25, Math.min(lifetimeAvgPerDay, recentAvgPerDay, weightedAvgPerDay));
+  const expectedAvgPerDay = weightedAvgPerDay;
+  const optimisticAvgPerDay = Math.min(
+    REALISTIC_MAX_HOURS_PER_DAY,
+    Math.max(lifetimeAvgPerDay, recentAvgPerDay, weightedAvgPerDay)
+  );
+
+  const scenarios = {
+    conservative: projectForecastScenario({
+      label: 'Conservative',
+      avgPerDay: conservativeAvgPerDay,
+      remainingHours,
+      today: normalizedToday,
+      statusesByDate,
+    }),
+    expected: projectForecastScenario({
+      label: 'Expected',
+      avgPerDay: expectedAvgPerDay,
+      remainingHours,
+      today: normalizedToday,
+      statusesByDate,
+    }),
+    optimistic: projectForecastScenario({
+      label: 'Optimistic',
+      avgPerDay: optimisticAvgPerDay,
+      remainingHours,
+      today: normalizedToday,
+      statusesByDate,
+    }),
+  };
+
+  const { confidence, confidenceReasons } = getForecastConfidence({
+    completeCount: completeWorkedEntries.length,
+    incompleteCount: incompleteWorkedEntries.length,
+    lifetimeAvgPerDay,
+    recentAvgPerDay,
+  });
+  const suggestions = buildForecastSuggestions({
+    incompleteCount: incompleteWorkedEntries.length,
+    lifetimeAvgPerDay,
+    recentAvgPerDay,
+    expectedScenario: scenarios.expected,
+    excludedCount: scenarios.expected.excludedDates.length,
+  });
+
+  return {
+    totalHours,
+    completeTotalHours,
+    lifetimeAvgPerDay,
+    recentAvgPerDay,
+    weightedAvgPerDay,
+    avgPerDay: scenarios.expected.avgPerDay,
+    remainingHours,
+    workingDaysRemaining: scenarios.expected.workingDaysRemaining,
+    neededAvgHoursPerDay: scenarios.expected.neededAvgHoursPerDay,
+    estimatedDate: scenarios.expected.estimatedDate,
+    excludedDates: scenarios.expected.excludedDates,
+    confidence,
+    confidenceReasons,
+    suggestions,
+    scenarios,
   };
 }
 

@@ -2,7 +2,9 @@ import mongoose from 'mongoose';
 
 const userSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true },
-  password: { type: String, required: true }, // Simple plain-text or lightweight hash for this use case
+  password: { type: String, required: true },
+  authTokenHash: { type: String, default: '' },
+  authTokenCreatedAt: Date,
   createdAt: { type: Date, default: Date.now }
 });
 

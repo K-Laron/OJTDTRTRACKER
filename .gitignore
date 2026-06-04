@@ -8,6 +8,8 @@ node_modules/
 dist/
 .runtime/
 .playwright-cli/
+.playwright-mcp/
+.worktrees/
 output/
 mongo/data/
 mongo/log/

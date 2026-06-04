@@ -1,4 +1,5 @@
 import { getScheduledNonWorkingStatus, isScheduledWorkday } from '../shared/work-schedule.js';
+import { calculateDtrOvertime } from '../shared/dtr-rules.js';
 
 const DEFAULT_STATE = {
   profile: {
@@ -31,6 +32,10 @@ const DEFAULT_ACTIVITY_TEMPLATES = [
   { id: 'template-testing', name: 'Testing', activities: 'Tested implemented features and validated expected behavior.', remarks: '' },
   { id: 'template-development', name: 'Development', activities: 'Implemented assigned tasks and reviewed related code changes.', remarks: '' },
 ];
+const RECENT_FORECAST_DAYS = 5;
+const MAX_FORECAST_DAYS = 366 * 3;
+const REALISTIC_MAX_HOURS_PER_DAY = 8;
+const TREND_DELTA_THRESHOLD_HOURS = 0.75;
 
 function toLocalDateString(date = new Date()) {
   const year = date.getFullYear();
@@ -64,6 +69,26 @@ function normalizeEntryStatus(entry = {}) {
   return 'absent';
 }
 
+function getEntrySortTime(entry = {}) {
+  const createdAt = Date.parse(entry.createdAt || '');
+  if (Number.isFinite(createdAt)) return createdAt;
+  const updatedAt = Date.parse(entry.updatedAt || '');
+  if (Number.isFinite(updatedAt)) return updatedAt;
+  return 0;
+}
+
+function getUniqueEntriesByDate(entries = []) {
+  const entriesByDate = new Map();
+  entries.forEach(entry => {
+    if (!entry?.date) return;
+    const current = entriesByDate.get(entry.date);
+    if (!current || getEntrySortTime(entry) >= getEntrySortTime(current)) {
+      entriesByDate.set(entry.date, entry);
+    }
+  });
+  return [...entriesByDate.values()];
+}
+
 function formatStatusLabel(status) {
   return String(status || 'absent')
     .replace(/_/g, ' ')
@@ -72,6 +97,145 @@ function formatStatusLabel(status) {
 
 function isWeekday(dateString) {
   return isScheduledWorkday(dateString);
+}
+
+function getEntryOvertime(entry = {}) {
+  return calculateDtrOvertime(entry.date || '', parseFloat(entry.hoursRendered) || 0);
+}
+
+function hasCompleteWorkedClockPair(entry = {}) {
+  if (entry.amTimeIn && entry.amTimeOut) return true;
+  if (entry.pmTimeIn && entry.pmTimeOut) return true;
+  if (!entry.amTimeIn && !entry.amTimeOut && !entry.pmTimeIn && !entry.pmTimeOut) return true;
+  return false;
+}
+
+function normalizeForecastEntry(entry = {}) {
+  const status = normalizeEntryStatus(entry);
+  const hoursRendered = Math.max(0, parseFloat(entry.hoursRendered) || 0);
+  return {
+    ...entry,
+    date: entry.date || '',
+    status,
+    hoursRendered,
+    isCompleteWorkedDay: status === 'present' && hoursRendered > 0 && hasCompleteWorkedClockPair(entry),
+    isIncompleteWorkedDay: status === 'present' && hoursRendered > 0 && !hasCompleteWorkedClockPair(entry),
+  };
+}
+
+function averageHours(entries = []) {
+  if (!entries.length) return 0;
+  return entries.reduce((sum, entry) => sum + entry.hoursRendered, 0) / entries.length;
+}
+
+function weightedAverageHours(entries = []) {
+  if (!entries.length) return 0;
+  const lifetimeAvgPerDay = averageHours(entries);
+  const recentAvgPerDay = averageHours(entries.slice(-RECENT_FORECAST_DAYS));
+  return ((recentAvgPerDay * 2) + lifetimeAvgPerDay) / 3;
+}
+
+function buildForecastStatusMap(entries = [], holidays = []) {
+  const statusByDate = new Map();
+
+  entries.forEach(entry => {
+    if (!entry?.date) return;
+    statusByDate.set(entry.date, normalizeForecastEntry(entry).status);
+  });
+
+  holidays.forEach(holiday => {
+    if (!holiday?.date || statusByDate.has(holiday.date)) return;
+    statusByDate.set(
+      holiday.date,
+      holiday.type === 'holiday' ? 'holiday' : holiday.type === 'vacation_leave' ? 'vacation' : 'leave'
+    );
+  });
+
+  return statusByDate;
+}
+
+function projectForecastScenario({ label, avgPerDay, remainingHours, today, statusByDate }) {
+  const safeAvg = Math.max(0, Number(avgPerDay) || 0);
+  const workingDaysRemaining = safeAvg > 0 ? Math.ceil(remainingHours / safeAvg) : 0;
+  const excludedDates = [];
+  const cursor = new Date(`${today}T00:00:00`);
+  let countedDays = 0;
+  let guard = 0;
+
+  while (countedDays < workingDaysRemaining && guard < MAX_FORECAST_DAYS) {
+    guard += 1;
+    cursor.setDate(cursor.getDate() + 1);
+    const dateKey = toLocalDateString(cursor);
+    const status = statusByDate.get(dateKey);
+
+    if (!isWeekday(dateKey)) continue;
+    if (NON_WORKING_STATUSES.has(status) && status !== 'absent') {
+      excludedDates.push({ date: dateKey, status });
+      continue;
+    }
+    countedDays += 1;
+  }
+
+  return {
+    label,
+    avgPerDay: safeAvg,
+    workingDaysRemaining,
+    neededAvgHoursPerDay: workingDaysRemaining > 0 ? remainingHours / workingDaysRemaining : 0,
+    estimatedDate: workingDaysRemaining === 0 ? today : toLocalDateString(cursor),
+    excludedDates,
+  };
+}
+
+function getForecastConfidence({ completeCount, incompleteCount, lifetimeAvgPerDay, recentAvgPerDay }) {
+  const confidenceReasons = [];
+  let confidence = 'high';
+
+  if (completeCount < 3) {
+    confidence = 'low';
+    confidenceReasons.push(`Only ${completeCount} complete worked day(s) available.`);
+  } else if (completeCount < RECENT_FORECAST_DAYS) {
+    confidence = 'medium';
+    confidenceReasons.push(`Only ${completeCount} complete worked day(s) available for trend weighting.`);
+  }
+
+  if (incompleteCount > 0) {
+    confidence = confidence === 'high' ? 'medium' : confidence;
+    confidenceReasons.push(`${incompleteCount} present day(s) have rendered hours but incomplete clock pairs.`);
+  }
+
+  if (Math.abs(recentAvgPerDay - lifetimeAvgPerDay) >= TREND_DELTA_THRESHOLD_HOURS) {
+    confidenceReasons.push('Recent pace differs from the full-history average.');
+  }
+
+  if (!confidenceReasons.length) {
+    confidenceReasons.push('Forecast is based on complete worked days with a stable recent trend.');
+  }
+
+  return { confidence, confidenceReasons };
+}
+
+function buildForecastSuggestions({ incompleteCount, lifetimeAvgPerDay, recentAvgPerDay, expectedScenario, excludedCount }) {
+  const suggestions = [];
+
+  if (incompleteCount > 0) {
+    suggestions.push(`Complete clock pairs for ${incompleteCount} present day(s) to improve forecast accuracy.`);
+  }
+
+  if (recentAvgPerDay - lifetimeAvgPerDay >= TREND_DELTA_THRESHOLD_HOURS) {
+    suggestions.push('Recent pace is faster than your full-history average, so the expected date was pulled earlier.');
+  } else if (lifetimeAvgPerDay - recentAvgPerDay >= TREND_DELTA_THRESHOLD_HOURS) {
+    suggestions.push('Recent pace is slower than your full-history average, so the expected date was pushed later.');
+  }
+
+  if (excludedCount > 0) {
+    suggestions.push(`${excludedCount} known non-working day(s) were excluded from the forecast.`);
+  }
+
+  if (expectedScenario.workingDaysRemaining > 0) {
+    suggestions.push(`Keep about ${expectedScenario.neededAvgHoursPerDay.toFixed(1)}h per working day to hit the expected date.`);
+  }
+
+  return suggestions.length ? suggestions : ['Current records are enough for a stable completion estimate.'];
 }
 
 class Store {
@@ -106,21 +270,24 @@ class Store {
     this.syncedHolidayYears = new Set();
     this.userId = localStorage.getItem('dtr_user_id') || null;
     this.username = localStorage.getItem('dtr_username') || null;
-    if (this.userId) {
+    this.authToken = localStorage.getItem('dtr_auth_token') || null;
+    if (this.userId && this.authToken) {
       this.init();
       this.startPolling();
+    } else if (this.userId) {
+      this.logout();
     }
   }
 
   async init() {
-    if (!this.userId) return;
+    if (!this.userId || !this.authToken) return;
     const sequence = ++this.initSequence;
     const dataVersionAtStart = this.dataVersion;
     let applied = false;
     this.isHydrating = true;
     this._notify({ resources: ['hydration'], forceRender: true });
     try {
-      const headers = { 'X-User-Id': this.userId };
+      const headers = this._authHeaders();
       const [entries, holidays, config] = await Promise.all([
         this._request('/entries', { headers }, { logoutOn401: true }),
         this._request('/holidays', { headers }, { logoutOn401: true }),
@@ -240,9 +407,9 @@ class Store {
   }
 
   async _refreshResources(resources = ['entries', 'holidays', 'config']) {
-    if (!this.userId) return;
+    if (!this.userId || !this.authToken) return;
     const resourceSet = new Set(resources);
-    const headers = { 'X-User-Id': this.userId };
+    const headers = this._authHeaders();
     const requests = [];
 
     if (resourceSet.has('entries')) {
@@ -323,9 +490,17 @@ class Store {
     return data;
   }
 
+  _authHeaders(extra = {}) {
+    return {
+      ...extra,
+      'X-User-Id': this.userId,
+      'X-Auth-Token': this.authToken,
+    };
+  }
+
   startPolling() {
-    if (!this.userId || this.evtSource) return;
-    this.evtSource = new EventSource(`${API_BASE}/sync?userId=${this.userId}`);
+    if (!this.userId || !this.authToken || this.evtSource) return;
+    this.evtSource = new EventSource(`${API_BASE}/sync?userId=${this.userId}&authToken=${encodeURIComponent(this.authToken)}`);
     this.evtSource.onmessage = async (e) => {
       const data = JSON.parse(e.data);
       if (data.type === 'update') {
@@ -352,7 +527,7 @@ class Store {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
     });
-    this._setAuth(data.userId, data.username);
+    this._setAuth(data.userId, data.username, data.authToken);
   }
 
   async register(username, password) {
@@ -360,14 +535,16 @@ class Store {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
     });
-    this._setAuth(data.userId, data.username);
+    this._setAuth(data.userId, data.username, data.authToken);
   }
 
-  _setAuth(id, name) {
+  _setAuth(id, name, authToken) {
     this.userId = id;
     this.username = name;
+    this.authToken = authToken;
     localStorage.setItem('dtr_user_id', id);
     localStorage.setItem('dtr_username', name);
+    localStorage.setItem('dtr_auth_token', authToken);
     this._markResourcesChanged(['auth']);
     this.init();
     this.startPolling();
@@ -379,8 +556,10 @@ class Store {
   logout() {
     this.userId = null;
     this.username = null;
+    this.authToken = null;
     localStorage.removeItem('dtr_user_id');
     localStorage.removeItem('dtr_username');
+    localStorage.removeItem('dtr_auth_token');
     if (this.evtSource) { this.evtSource.close(); this.evtSource = null; }
     this.state = structuredClone(DEFAULT_STATE);
     this.syncedHolidayYears = new Set();
@@ -398,7 +577,7 @@ class Store {
     this._queueLocalSyncSkip();
     const newEntry = await this._request('/entries', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+      headers: this._authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(entry)
     }, { logoutOn401: true }).catch(err => {
       this._consumeLocalSyncSkip();
@@ -421,7 +600,7 @@ class Store {
     try {
       updatedEntry = await this._request(`/entries/${id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+        headers: this._authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ ...updates, previousState: previousEntry })
       }, { logoutOn401: true });
     } catch (err) {
@@ -454,7 +633,7 @@ class Store {
     try {
       await this._request(`/entries/${id}`, {
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+        headers: this._authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ previousState: entry || null, force })
       }, { logoutOn401: true });
     } catch (err) {
@@ -511,7 +690,7 @@ class Store {
     const monthly = Object.create(null);
     const weekly = Object.create(null);
 
-    for (const entry of this.state.entries) {
+    for (const entry of getUniqueEntriesByDate(this.state.entries)) {
       if (!entry.amTimeOut && !entry.pmTimeOut) continue;
 
       const monthKey = entry.date.slice(0, 7);
@@ -519,7 +698,7 @@ class Store {
         monthly[monthKey] = { hours: 0, ot: 0, late: 0, undertime: 0, days: 0 };
       }
       monthly[monthKey].hours += entry.hoursRendered || 0;
-      monthly[monthKey].ot += entry.overtimeHours || 0;
+      monthly[monthKey].ot += getEntryOvertime(entry);
       monthly[monthKey].late += entry.lateMinutes || 0;
       monthly[monthKey].undertime += entry.undertimeMinutes || 0;
       monthly[monthKey].days += 1;
@@ -638,7 +817,7 @@ class Store {
     if (limit != null) params.set('limit', String(limit));
     const query = params.toString();
     return this._request(`/entries${query ? `?${query}` : ''}`, {
-      headers: { 'X-User-Id': this.userId }
+      headers: this._authHeaders()
     }, { logoutOn401: true });
   }
 
@@ -669,7 +848,7 @@ class Store {
     this._queueLocalSyncSkip();
     const savedConfig = await this._request('/config', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+      headers: this._authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ 
         profile: this.state.profile, 
         settings: this.state.settings, 
@@ -704,7 +883,7 @@ class Store {
     if (normalizedYears.length) params.set('years', normalizedYears.join(','));
 
     return this._request(`/holidays${params.toString() ? `?${params}` : ''}`, {
-      headers: { 'X-User-Id': this.userId }
+      headers: this._authHeaders()
     }, { logoutOn401: true });
   }
 
@@ -738,7 +917,7 @@ class Store {
       this._queueLocalSyncSkip();
       const newHol = await this._request('/holidays', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+        headers: this._authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(h)
       }, { logoutOn401: true }).catch(err => {
         this._consumeLocalSyncSkip();
@@ -752,7 +931,7 @@ class Store {
 
   async removeHoliday(date) { 
     this._queueLocalSyncSkip();
-    await this._request(`/holidays/${date}`, { method: 'DELETE', headers: { 'X-User-Id': this.userId } }, { logoutOn401: true }).catch(err => {
+    await this._request(`/holidays/${date}`, { method: 'DELETE', headers: this._authHeaders() }, { logoutOn401: true }).catch(err => {
       this._consumeLocalSyncSkip();
       throw err;
     });
@@ -766,7 +945,7 @@ class Store {
     this._queueLocalSyncSkip();
     const restored = await this._request(`/holidays/${snapshot.date}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+      headers: this._authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(snapshot)
     }, { logoutOn401: true }).catch(err => {
       this._consumeLocalSyncSkip();
@@ -786,7 +965,7 @@ class Store {
     this._queueLocalSyncSkip();
     await this._request('/config', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+      headers: this._authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(snapshot)
     }, { logoutOn401: true }).catch(err => {
       this._consumeLocalSyncSkip();
@@ -861,12 +1040,12 @@ class Store {
       daysAttended: 0,
     };
 
-    for (const entry of this.state.entries) {
+    for (const entry of getUniqueEntriesByDate(this.state.entries)) {
       const status = normalizeEntryStatus(entry);
       if (status !== 'present') continue;
 
       stats.totalHours += parseFloat(entry.hoursRendered) || 0;
-      stats.totalOvertime += parseFloat(entry.overtimeHours) || 0;
+      stats.totalOvertime += getEntryOvertime(entry);
       stats.totalLateMinutes += parseInt(entry.lateMinutes) || 0;
       stats.totalUndertimeMinutes += parseInt(entry.undertimeMinutes) || 0;
       if (entry.amTimeOut || entry.pmTimeOut) {
@@ -939,75 +1118,141 @@ class Store {
     const forecast = this.getCompletionForecast();
     if (!forecast) return null;
     return {
+      totalHours: forecast.totalHours,
+      lifetimeAvgPerDay: forecast.lifetimeAvgPerDay,
+      recentAvgPerDay: forecast.recentAvgPerDay,
+      weightedAvgPerDay: forecast.weightedAvgPerDay,
       avgPerDay: forecast.avgPerDay,
       daysNeeded: forecast.workingDaysRemaining,
       estimatedDate: forecast.estimatedDate,
       remainingHours: forecast.remainingHours,
       neededAvgHoursPerDay: forecast.neededAvgHoursPerDay,
       excludedDates: forecast.excludedDates,
+      confidence: forecast.confidence,
+      confidenceReasons: forecast.confidenceReasons,
+      suggestions: forecast.suggestions,
+      scenarios: forecast.scenarios,
     };
   }
 
   getCompletionForecast(today = toLocalDateString(new Date())) {
-    const presentEntries = this.state.entries
-      .map(entry => ({ ...entry, status: normalizeEntryStatus(entry) }))
-      .filter(entry => entry.status === 'present' && (parseFloat(entry.hoursRendered) || 0) > 0);
+    const forecastEntries = getUniqueEntriesByDate(this.state.entries).map(normalizeForecastEntry);
+    const completeWorkedEntries = forecastEntries
+      .filter(entry => entry.isCompleteWorkedDay)
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    const incompleteWorkedEntries = forecastEntries.filter(entry => entry.isIncompleteWorkedDay);
 
-    if (!presentEntries.length) return null;
+    if (!completeWorkedEntries.length) return null;
 
-    const totalHours = presentEntries.reduce((sum, entry) => sum + (parseFloat(entry.hoursRendered) || 0), 0);
-    const avgPerDay = totalHours / presentEntries.length;
+    const totalHours = forecastEntries
+      .filter(entry => entry.status === 'present')
+      .reduce((sum, entry) => sum + entry.hoursRendered, 0);
+    const completeTotalHours = completeWorkedEntries.reduce((sum, entry) => sum + entry.hoursRendered, 0);
+    const lifetimeAvgPerDay = averageHours(completeWorkedEntries);
+    const recentAvgPerDay = averageHours(completeWorkedEntries.slice(-RECENT_FORECAST_DAYS));
+    const weightedAvgPerDay = weightedAverageHours(completeWorkedEntries);
+    const avgPerDay = weightedAvgPerDay;
+
     if (avgPerDay <= 0) return null;
 
     const remainingHours = Math.max(0, this.getRequiredHours() - totalHours);
+    const statusByDate = buildForecastStatusMap(forecastEntries, this.state.holidays);
+
     if (remainingHours === 0) {
+      const scenario = {
+        label: 'Expected',
+        avgPerDay,
+        workingDaysRemaining: 0,
+        neededAvgHoursPerDay: 0,
+        estimatedDate: today,
+        excludedDates: [],
+      };
       return {
+        totalHours,
+        completeTotalHours,
+        lifetimeAvgPerDay,
+        recentAvgPerDay,
+        weightedAvgPerDay,
         avgPerDay,
         remainingHours,
         workingDaysRemaining: 0,
         neededAvgHoursPerDay: 0,
         estimatedDate: today,
         excludedDates: [],
+        confidence: completeWorkedEntries.length < 3 ? 'low' : 'high',
+        confidenceReasons: completeWorkedEntries.length < 3
+          ? [`Only ${completeWorkedEntries.length} complete worked day(s) available.`]
+          : ['Required hours are complete.'],
+        suggestions: ['Required OJT hours are complete.'],
+        scenarios: {
+          conservative: { ...scenario, label: 'Conservative' },
+          expected: scenario,
+          optimistic: { ...scenario, label: 'Optimistic' },
+        },
       };
     }
 
-    const statusByDate = new Map();
-    this.state.entries.forEach(entry => {
-      statusByDate.set(entry.date, normalizeEntryStatus(entry));
+    const conservativeAvgPerDay = Math.max(0.25, Math.min(lifetimeAvgPerDay, recentAvgPerDay, weightedAvgPerDay));
+    const expectedAvgPerDay = weightedAvgPerDay;
+    const optimisticAvgPerDay = Math.min(
+      REALISTIC_MAX_HOURS_PER_DAY,
+      Math.max(lifetimeAvgPerDay, recentAvgPerDay, weightedAvgPerDay)
+    );
+
+    const scenarios = {
+      conservative: projectForecastScenario({
+        label: 'Conservative',
+        avgPerDay: conservativeAvgPerDay,
+        remainingHours,
+        today,
+        statusByDate,
+      }),
+      expected: projectForecastScenario({
+        label: 'Expected',
+        avgPerDay: expectedAvgPerDay,
+        remainingHours,
+        today,
+        statusByDate,
+      }),
+      optimistic: projectForecastScenario({
+        label: 'Optimistic',
+        avgPerDay: optimisticAvgPerDay,
+        remainingHours,
+        today,
+        statusByDate,
+      }),
+    };
+
+    const { confidence, confidenceReasons } = getForecastConfidence({
+      completeCount: completeWorkedEntries.length,
+      incompleteCount: incompleteWorkedEntries.length,
+      lifetimeAvgPerDay,
+      recentAvgPerDay,
     });
-    this.state.holidays.forEach(holiday => {
-      if (statusByDate.has(holiday.date)) return;
-      statusByDate.set(
-        holiday.date,
-        holiday.type === 'holiday' ? 'holiday' : holiday.type === 'vacation_leave' ? 'vacation' : 'leave'
-      );
+    const suggestions = buildForecastSuggestions({
+      incompleteCount: incompleteWorkedEntries.length,
+      lifetimeAvgPerDay,
+      recentAvgPerDay,
+      expectedScenario: scenarios.expected,
+      excludedCount: scenarios.expected.excludedDates.length,
     });
-
-    const workingDaysRemaining = Math.ceil(remainingHours / avgPerDay);
-    const excludedDates = [];
-    const cursor = new Date(`${today}T00:00:00`);
-    let countedDays = 0;
-
-    while (countedDays < workingDaysRemaining) {
-      cursor.setDate(cursor.getDate() + 1);
-      const dateKey = toLocalDateString(cursor);
-      const status = statusByDate.get(dateKey);
-
-      if (!isWeekday(dateKey)) continue;
-      if (NON_WORKING_STATUSES.has(status) && status !== 'absent') {
-        excludedDates.push({ date: dateKey, status });
-        continue;
-      }
-      countedDays += 1;
-    }
 
     return {
-      avgPerDay,
+      totalHours,
+      completeTotalHours,
+      lifetimeAvgPerDay,
+      recentAvgPerDay,
+      weightedAvgPerDay,
+      avgPerDay: scenarios.expected.avgPerDay,
       remainingHours,
-      workingDaysRemaining,
-      neededAvgHoursPerDay: remainingHours / workingDaysRemaining,
-      estimatedDate: toLocalDateString(cursor),
-      excludedDates,
+      workingDaysRemaining: scenarios.expected.workingDaysRemaining,
+      neededAvgHoursPerDay: scenarios.expected.neededAvgHoursPerDay,
+      estimatedDate: scenarios.expected.estimatedDate,
+      excludedDates: scenarios.expected.excludedDates,
+      confidence,
+      confidenceReasons,
+      suggestions,
+      scenarios,
     };
   }
 
@@ -1020,7 +1265,7 @@ class Store {
     const sunday = new Date(monday);
     sunday.setDate(monday.getDate() + 6);
     const sundayStr = toLocalDateString(sunday);
-    return this.state.entries
+    return getUniqueEntriesByDate(this.state.entries)
       .filter(e => e.date >= mondayStr && e.date <= sundayStr && normalizeEntryStatus(e) === 'present')
       .reduce((s, e) => s + (parseFloat(e.hoursRendered) || 0), 0);
   }
@@ -1133,11 +1378,11 @@ class Store {
   }
 
   getSummaryPack({ dateFrom, dateTo } = {}) {
-    const entries = this.getAllEntriesWithDerivedStatus()
+    const entries = getUniqueEntriesByDate(this.getAllEntriesWithDerivedStatus())
       .filter(entry => (!dateFrom || entry.date >= dateFrom) && (!dateTo || entry.date <= dateTo));
     const totals = entries.reduce((acc, entry) => {
       acc.totalHours += parseFloat(entry.hoursRendered) || 0;
-      acc.totalOvertime += parseFloat(entry.overtimeHours) || 0;
+      acc.totalOvertime += getEntryOvertime(entry);
       acc.totalLate += parseInt(entry.lateMinutes) || 0;
       acc.totalUndertime += parseInt(entry.undertimeMinutes) || 0;
       acc.statuses[entry.status] = (acc.statuses[entry.status] || 0) + 1;
@@ -1178,7 +1423,7 @@ class Store {
     const data = JSON.parse(json);
     return this._request('/import/preview', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+      headers: this._authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(data)
     }, { logoutOn401: true });
   }
@@ -1189,7 +1434,7 @@ class Store {
       this._queueLocalSyncSkip();
       await this._request('/import', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+        headers: this._authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(data)
       }, { logoutOn401: true }).catch(err => {
         this._consumeLocalSyncSkip();
@@ -1218,7 +1463,7 @@ class Store {
     this._queueLocalSyncSkip();
     const restored = await this._request(path, {
       method,
-      headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+      headers: this._authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(body)
     }, { logoutOn401: true }).catch(err => {
       this._consumeLocalSyncSkip();
@@ -1240,7 +1485,7 @@ class Store {
     this._queueLocalSyncSkip();
     await this._request('/import', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+      headers: this._authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(snapshot)
     }, { logoutOn401: true }).catch(err => {
       this._consumeLocalSyncSkip();
@@ -1258,7 +1503,7 @@ class Store {
       this._queueLocalSyncSkip();
       await this._request('/import', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+        headers: this._authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(DEFAULT_STATE)
       }, { logoutOn401: true }).catch(err => {
         this._consumeLocalSyncSkip();

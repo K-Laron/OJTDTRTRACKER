@@ -1,53 +1,68 @@
 import * as XLSX from 'xlsx';
-import { MONTHS, getCurrentDate, getDayName, getDaysInMonth, toast, fmtTimeStr } from '../utils.js';
+import { MONTHS, getCurrentDate, toast } from '../utils.js';
 import { buildDTRExportFilename } from './export-filenames.js';
+import { buildDtrSheetModel } from './dtr-sheet-model.js';
+
+function applyCellAlignment(ws, address, alignment) {
+  if (!ws[address]) return;
+  ws[address].s = {
+    ...(ws[address].s || {}),
+    alignment: {
+      ...((ws[address].s || {}).alignment || {}),
+      ...alignment,
+    },
+  };
+}
 
 export function exportDTRtoExcel(entries, holidays, month, year, profile, settings, username = '') {
   try {
-    const scheduleText = `${fmtTimeStr(settings.expectedTimeIn)} - ${fmtTimeStr(settings.expectedTimeOut)}`;
+    const sheet = buildDtrSheetModel({ entries, holidays, month, year, profile, settings });
     const data = [
       ['DAILY TIME RECORD'],
       ['Civil Service Form No. 48'],
       [],
       [`Name: ${profile.name || ''}`, '', '', `Department: ${profile.department || ''}`],
-      [`Month/Year: ${MONTHS[month]} ${year}`, '', '', `Supervisor: ${profile.supervisor || ''}`],
-      [`Position: ${profile.position || 'OJT Trainee'}`, '', '', `Schedule: ${scheduleText}`],
+      [`Month/Year: ${sheet.monthLabel}`, '', '', `Supervisor: ${profile.supervisor || ''}`],
+      [`Position: ${profile.position || 'OJT Trainee'}`, '', '', `Schedule: ${sheet.scheduleText}`],
       [],
-      ['Day', 'Day Name', 'AM In', 'AM Out', 'PM In', 'PM Out', 'Hours Rendered', 'Overtime', 'Late (min)', 'Undertime (min)', 'Activities', 'Remarks'],
+      ['Day', 'Day Name', 'AM In', 'AM Out', 'PM In', 'PM Out', 'Hours Rendered', 'Overtime', 'Late (min)', 'Undertime (min)', 'Remarks'],
     ];
 
-    const daysInMonth = getDaysInMonth(year, month);
-    for (let d = 1; d <= daysInMonth; d++) {
-      const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-      const e = entries.find(x => x.date === dateStr);
-      const holiday = holidays.find(x => x.date === dateStr);
-      const holidayType = holiday ? holiday.type.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase()) : '';
+    for (const row of sheet.rows) {
       data.push([
-        d,
-        getDayName(dateStr),
-        fmtTimeStr(e?.amTimeIn) === '--' ? '' : fmtTimeStr(e?.amTimeIn),
-        fmtTimeStr(e?.amTimeOut) === '--' ? '' : fmtTimeStr(e?.amTimeOut),
-        fmtTimeStr(e?.pmTimeIn) === '--' ? '' : fmtTimeStr(e?.pmTimeIn),
-        fmtTimeStr(e?.pmTimeOut) === '--' ? '' : fmtTimeStr(e?.pmTimeOut),
-        (e?.amTimeOut || e?.pmTimeOut) ? parseFloat(e.hoursRendered.toFixed(2)) : '',
-        e?.overtimeHours > 0 ? parseFloat(e.overtimeHours.toFixed(2)) : '',
-        e?.lateMinutes || '',
-        e?.undertimeMinutes || '',
-        e?.activities || holiday?.name || '',
-        e?.remarks || holidayType || '',
+        row.day,
+        row.dayName,
+        row.amTimeIn === '--' ? '' : row.amTimeIn,
+        row.amTimeOut === '--' ? '' : row.amTimeOut,
+        row.pmTimeIn === '--' ? '' : row.pmTimeIn,
+        row.pmTimeOut === '--' ? '' : row.pmTimeOut,
+        row.hoursDisplay ? parseFloat(row.hoursDisplay) : '',
+        row.overtimeDisplay,
+        row.entry?.lateMinutes || '',
+        row.entry?.undertimeMinutes || '',
+        row.remarks,
       ]);
     }
 
-    const totalHrs = entries.reduce((s, e) => s + (e.hoursRendered || 0), 0);
-    const totalOT = entries.reduce((s, e) => s + (e.overtimeHours || 0), 0);
     data.push([]);
-    data.push(['', '', '', '', '', 'TOTAL:', parseFloat(totalHrs.toFixed(2)), parseFloat(totalOT.toFixed(2))]);
+    data.push(['', '', '', '', '', 'TOTAL:', parseFloat(sheet.totals.totalHoursDisplay), sheet.totals.totalOvertimeDisplay]);
 
     const ws = XLSX.utils.aoa_to_sheet(data);
     ws['!cols'] = [
-      { wch: 5 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 },
-      { wch: 14 }, { wch: 10 }, { wch: 10 }, { wch: 14 }, { wch: 40 }, { wch: 20 },
+      { wch: 5 }, { wch: 11 }, { wch: 9 }, { wch: 9 }, { wch: 9 }, { wch: 9 },
+      { wch: 12 }, { wch: 8 }, { wch: 10 }, { wch: 13 }, { wch: 42 },
     ];
+    ws['!margins'] = { left: 0.25, right: 0.25, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 };
+    ws['!pageSetup'] = { paperSize: 9, orientation: 'portrait', fitToWidth: 1, fitToHeight: 0 };
+
+    const range = XLSX.utils.decode_range(ws['!ref']);
+    for (let row = 8; row <= range.e.r; row++) {
+      applyCellAlignment(ws, XLSX.utils.encode_cell({ r: row, c: 10 }), {
+        horizontal: 'center',
+        vertical: 'center',
+        wrapText: true,
+      });
+    }
 
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, `DTR ${MONTHS[month].slice(0, 3)} ${year}`);
