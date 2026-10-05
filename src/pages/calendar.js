@@ -6,7 +6,6 @@ import { fmtHours, getDayName, getDaysInMonth, MONTHS, ICONS,
 
 let selYear = new Date().getFullYear();
 let selMonth = new Date().getMonth();
-let forcedHolidayRefreshKey = '';
 
 async function ensureVisibleYearHolidays(force = false) {
   return ensureYearHolidays(selYear, { force, logTag: 'Calendar' });
@@ -236,13 +235,7 @@ export function render() {
 export function mount(container) {
   const root = getRoot(container);
   if (!root) return;
-  const refreshKey = `${store.userId || 'guest'}:${selYear}`;
-  if (forcedHolidayRefreshKey !== refreshKey) {
-    forcedHolidayRefreshKey = refreshKey;
-    void ensureVisibleYearHolidays(true);
-  } else {
-    void ensureVisibleYearHolidays();
-  }
+  void ensureVisibleYearHolidays();
   if (root.dataset.bound === 'true') return;
   root.dataset.bound = 'true';
 

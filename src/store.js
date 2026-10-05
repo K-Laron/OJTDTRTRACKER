@@ -102,6 +102,10 @@ class Store {
     this.monthHolidaysCache = new Map();
     this.summaryStatsCache = null;
     this.summaryStatsCacheVersion = -1;
+    this.alertsCache = [];
+    this.alertsCacheVersion = -1;
+    this.summaryPackCache = null;
+    this.summaryPackCacheKey = '';
     this.trendDataCache = null;
     this.trendDataCacheVersion = -1;
     this.pendingLocalSyncSkips = 0;
@@ -165,6 +169,10 @@ class Store {
     this.monthEntriesCache.clear();
     this.summaryStatsCache = null;
     this.summaryStatsCacheVersion = -1;
+    this.alertsCache = [];
+    this.alertsCacheVersion = -1;
+    this.summaryPackCache = null;
+    this.summaryPackCacheKey = '';
     this.trendDataCache = null;
     this.trendDataCacheVersion = -1;
   }
@@ -1010,6 +1018,11 @@ class Store {
   }
 
   getDataQualityAlerts() {
+    const entriesVersion = this.getResourceVersion('entries');
+    if (this.alertsCacheVersion === entriesVersion) {
+      return this.alertsCache;
+    }
+
     const alerts = [];
 
     this.getAllEntriesWithDerivedStatus().forEach(entry => {
@@ -1026,6 +1039,8 @@ class Store {
       }
     });
 
+    this.alertsCache = alerts;
+    this.alertsCacheVersion = entriesVersion;
     return alerts;
   }
 
@@ -1122,6 +1137,10 @@ class Store {
   }
 
   getSummaryPack({ dateFrom, dateTo } = {}) {
+    const cacheKey = `${this.getResourceVersion('entries')}:${dateFrom || ''}:${dateTo || ''}`;
+    if (this.summaryPackCacheKey === cacheKey && this.summaryPackCache) {
+      return this.summaryPackCache;
+    }
     const entries = this.getAllEntriesWithDerivedStatus()
       .filter(entry => (!dateFrom || entry.date >= dateFrom) && (!dateTo || entry.date <= dateTo));
     const totals = entries.reduce((acc, entry) => {
@@ -1153,12 +1172,15 @@ class Store {
       .slice(0, 5)
       .map(([activity, count]) => ({ activity, count }));
 
-    return {
+    const pack = {
       ...totals,
       entries,
       highlights,
       narrative: `Completed ${totals.totalHours.toFixed(1)} hours with ${totals.statuses.present} present day(s) in the selected period.`,
     };
+    this.summaryPackCache = pack;
+    this.summaryPackCacheKey = cacheKey;
+    return pack;
   }
 
   // --- Data Management ---
