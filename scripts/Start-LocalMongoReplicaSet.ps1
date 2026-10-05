@@ -17,10 +17,11 @@ $dataDir = Join-Path $PSScriptRoot "..\mongo\data"
 $logDir = Join-Path $PSScriptRoot "..\mongo\log"
 New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+$logFile = Join-Path $logDir "mongod.log"
 
 $listener = Get-NetTCPConnection -LocalPort 27018 -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $listener) {
-  Start-Process -FilePath $MongoBin -ArgumentList "--config `"$ConfigPath`"" -WindowStyle Hidden | Out-Null
+  Start-Process -FilePath $MongoBin -ArgumentList "--config `"$ConfigPath`" --dbpath `"$dataDir`" --logpath `"$logFile`"" -WindowStyle Hidden | Out-Null
   Start-Sleep -Seconds 3
 }
 
