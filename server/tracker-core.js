@@ -1,4 +1,9 @@
 import { isScheduledWorkday } from '../shared/work-schedule.js';
+import {
+  calculateHours as sharedCalculateHours,
+  parseTimeStrict,
+  toLocalDateString as sharedToLocalDateString,
+} from '../shared/time.js';
 
 export const DEFAULT_SETTINGS = {
   requiredHours: 486,
@@ -27,25 +32,15 @@ function toNumber(value, fallback) {
 }
 
 function toLocalDateString(date = new Date()) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return sharedToLocalDateString(date);
 }
 
 export function parseTime(value) {
-  if (!value) return null;
-  if (!TIME_RE.test(value)) return null;
-  const [hours, minutes] = value.split(':').map(Number);
-  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
-  return (hours * 60) + minutes;
+  return parseTimeStrict(value);
 }
 
 export function calculateHours(timeIn, timeOut, breakMins = 0) {
-  const start = parseTime(timeIn);
-  const end = parseTime(timeOut);
-  if (start == null || end == null) return 0;
-  return Math.max(0, (end - start - breakMins) / 60);
+  return sharedCalculateHours(timeIn, timeOut, breakMins);
 }
 
 export function calculateEntryHours(entry) {
@@ -120,6 +115,14 @@ export function normalizeSettings(settings = {}) {
   const expectedTimeOut = normalizeTime(settings.expectedTimeOut ?? DEFAULT_SETTINGS.expectedTimeOut, 'Expected Time Out');
   const clockInReminder = normalizeTime(settings.clockInReminder ?? expectedTimeIn, 'Clock-In Reminder');
   const clockOutReminder = normalizeTime(settings.clockOutReminder ?? expectedTimeOut, 'Clock-Out Reminder');
+  let lastBackupDate = null;
+  if (settings.lastBackupDate) {
+    const parsed = Date.parse(settings.lastBackupDate);
+    if (Number.isNaN(parsed)) {
+      throw new Error('Last Backup Date is invalid');
+    }
+    lastBackupDate = new Date(parsed).toISOString();
+  }
 
   return {
     requiredHours: Math.max(1, Math.round(toNumber(settings.requiredHours, DEFAULT_SETTINGS.requiredHours))),
@@ -128,7 +131,7 @@ export function normalizeSettings(settings = {}) {
     expectedTimeOut,
     weeklyTarget: Math.max(1, Math.round(toNumber(settings.weeklyTarget, DEFAULT_SETTINGS.weeklyTarget))),
     autoBackup: ['off', 'weekly', 'monthly'].includes(settings.autoBackup) ? settings.autoBackup : DEFAULT_SETTINGS.autoBackup,
-    lastBackupDate: settings.lastBackupDate ? new Date(settings.lastBackupDate).toISOString() : null,
+    lastBackupDate,
     notificationsEnabled: Boolean(settings.notificationsEnabled),
     clockInReminder,
     clockOutReminder,
@@ -254,7 +257,12 @@ export function resolveEntryUpdate(currentEntry, previousState, updates, setting
   };
 }
 
-export function sanitizeEntry(input = {}, settings = DEFAULT_SETTINGS, { existingEntry = null, requireId = true } = {}) {
+export function sanitizeEntry(input = {}, settings = DEFAULT_SETTINGS, { existingEntry = null, requireId = true, now = null } = {}) {
+  const effectiveSettings = normalizeSettings(settings);
+  return sanitizeEntryWithEffectiveSettings(input, effectiveSettings, { existingEntry, requireId, now });
+}
+
+function sanitizeEntryWithEffectiveSettings(input = {}, effectiveSettings, { existingEntry = null, requireId = true, now = null } = {}) {
   const base = existingEntry ? {
     id: existingEntry.id,
     date: existingEntry.date,
@@ -306,18 +314,18 @@ export function sanitizeEntry(input = {}, settings = DEFAULT_SETTINGS, { existin
     pmTimeOut,
     remarks: normalizeText(merged.remarks),
     activities: normalizeText(merged.activities),
-    createdAt: merged.createdAt || new Date().toISOString(),
+    createdAt: merged.createdAt || now || new Date().toISOString(),
   };
 
-  const effectiveSettings = normalizeSettings(settings);
+  const effective = effectiveSettings || DEFAULT_SETTINGS;
   const hoursRendered = isPresentStatus(status) ? calculateEntryHours(entry) : 0;
 
   return {
     ...entry,
     hoursRendered,
     overtimeHours: isPresentStatus(status) ? calculateOvertime(hoursRendered) : 0,
-    lateMinutes: isPresentStatus(status) && amTimeIn ? calculateLate(amTimeIn, effectiveSettings.expectedTimeIn) : 0,
-    undertimeMinutes: isPresentStatus(status) && pmTimeOut ? calculateUndertime(pmTimeOut, effectiveSettings.expectedTimeOut) : 0,
+    lateMinutes: isPresentStatus(status) && amTimeIn ? calculateLate(amTimeIn, effective.expectedTimeIn) : 0,
+    undertimeMinutes: isPresentStatus(status) && pmTimeOut ? calculateUndertime(pmTimeOut, effective.expectedTimeOut) : 0,
   };
 }
 
@@ -404,7 +412,7 @@ export function sanitizeImportPayload(payload = {}) {
   }
 
   for (const rawEntry of payload.entries || []) {
-    const entry = sanitizeEntry(rawEntry, settings, { requireId: true });
+    const entry = sanitizeEntryWithEffectiveSettings(rawEntry, settings, { requireId: true });
     if (entryIds.has(entry.id)) {
       throw new Error(`Duplicate entry id: ${entry.id}`);
     }
