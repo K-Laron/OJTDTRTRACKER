@@ -1,6 +1,7 @@
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 import { MONTHS, getCurrentDate, getDayName, getDaysInMonth, toast, fmtTimeStr } from '../utils.js';
+import { formatHolidayTypeLabel } from '../../shared/labels.js';
 import { buildDTRExportFilename } from './export-filenames.js';
 
 export function exportDTRtoPDF(entries, holidays, month, year, profile, settings, username = '') {
@@ -35,7 +36,7 @@ export function exportDTRtoPDF(entries, holidays, month, year, profile, settings
       const dayName = getDayName(dateStr);
       const e = entries.find(x => x.date === dateStr);
       const holiday = holidays.find(x => x.date === dateStr);
-      const holidayType = holiday ? holiday.type.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase()) : '';
+      const holidayType = holiday ? formatHolidayTypeLabel(holiday.type) : '';
       tableData.push([
         d, dayName,
         fmtTimeStr(e?.amTimeIn), fmtTimeStr(e?.amTimeOut),

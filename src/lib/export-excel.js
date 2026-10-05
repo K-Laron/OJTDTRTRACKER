@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import { MONTHS, getCurrentDate, getDayName, getDaysInMonth, toast, fmtTimeStr } from '../utils.js';
+import { formatHolidayTypeLabel } from '../../shared/labels.js';
 import { buildDTRExportFilename } from './export-filenames.js';
 
 export function exportDTRtoExcel(entries, holidays, month, year, profile, settings, username = '') {
@@ -21,7 +22,7 @@ export function exportDTRtoExcel(entries, holidays, month, year, profile, settin
       const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
       const e = entries.find(x => x.date === dateStr);
       const holiday = holidays.find(x => x.date === dateStr);
-      const holidayType = holiday ? holiday.type.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase()) : '';
+      const holidayType = holiday ? formatHolidayTypeLabel(holiday.type) : '';
       data.push([
         d,
         getDayName(dateStr),

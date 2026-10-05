@@ -1,5 +1,6 @@
 import { store } from '../store.js';
 import { ensureYearHolidays } from './holiday-refresh.js';
+import { formatHolidayTypeLabel } from '../../shared/labels.js';
 import { fmtHours, getDayName, getDaysInMonth, MONTHS, ICONS,
   openModal, closeModal, confirmDialog, toast, getCurrentDate, fmtDate, fmtTimeStr, requestRender } from '../utils.js';
 
@@ -107,10 +108,6 @@ function openAddHolidayModal() {
       toast(err.message || 'Failed to add holiday/leave', 'error');
     }
   };
-}
-
-function formatHolidayTypeLabel(type) {
-  return String(type || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
 function renderHolidayLane(title, items, variant) {
