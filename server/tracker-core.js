@@ -117,7 +117,7 @@ export function normalizeSettings(settings = {}) {
   const clockOutReminder = normalizeTime(settings.clockOutReminder ?? expectedTimeOut, 'Clock-Out Reminder');
   let lastBackupDate = null;
   if (settings.lastBackupDate) {
-    const parsed = Date.parse(settings.lastBackupDate);
+    const parsed = new Date(settings.lastBackupDate).getTime();
     if (Number.isNaN(parsed)) {
       throw new Error('Last Backup Date is invalid');
     }
