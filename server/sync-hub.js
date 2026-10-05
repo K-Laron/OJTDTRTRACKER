@@ -8,11 +8,11 @@ export function addSyncClient(userId, res) {
   // Send initial connected event
   res.write('data: {"type":"connected"}\n\n');
 
-  const client = { id: Date.now(), userId, res };
+  const client = { userId, res };
   clients.push(client);
 
   return () => {
-    clients = clients.filter((c) => c.id !== client.id);
+    clients = clients.filter((c) => c !== client);
   };
 }
 
