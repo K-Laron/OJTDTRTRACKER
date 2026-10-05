@@ -2,8 +2,8 @@ import mongoose from 'mongoose';
 
 const userSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true },
-  // ponytail: plain-text password kept for local single-user flow. Hash with
-  // bcrypt plus a migration before any hosted or multi-device use.
+  // Stored as scrypt hash for new accounts; legacy plain-text rows are
+  // upgraded on next successful login (see services/auth.service.js).
   password: { type: String, required: true },
   createdAt: { type: Date, default: Date.now }
 });
