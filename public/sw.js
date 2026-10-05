@@ -3,7 +3,7 @@ self.addEventListener('install', e => { self.skipWaiting(); });
 self.addEventListener('activate', e => {
   e.waitUntil(
     caches.keys()
-      .then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key))))
+      .then(keys => Promise.all(keys.filter(key => key !== CACHE && key.startsWith('dtr-')).map(key => caches.delete(key))))
       .then(() => clients.claim())
   );
 });
