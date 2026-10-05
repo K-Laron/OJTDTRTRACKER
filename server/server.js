@@ -1,9 +1,10 @@
 import express from 'express';
-import mongoose from 'mongoose';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { AuditEvent, User, Entry, Holiday, Config } from './models.js';
 import { syncPhilippinePublicHolidays } from './holiday-sync.js';
+import { connectDb, isTransactionUnsupported, withOptionalTransaction } from './db.js';
+import { addSyncClient, notifyClients } from './sync-hub.js';
 import {
   buildImportPreview,
   DEFAULT_SETTINGS,
@@ -26,68 +27,15 @@ app.use(cors());
 app.use(express.json({ limit: '5mb' }));
 
 // Connect to MongoDB
-mongoose.connect(MONGODB_URI)
+connectDb(MONGODB_URI)
   .then(() => console.log('Connected to MongoDB'))
   .catch(err => console.error('MongoDB connection error:', err));
 
 // --- Real-time Sync (SSE) ---
-let clients = [];
-
 app.get('/api/sync', (req, res) => {
-  const userId = req.query.userId;
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  
-  // Send initial connected event
-  res.write('data: {"type":"connected"}\n\n');
-  
-  const client = { id: Date.now(), userId, res };
-  clients.push(client);
-  
-  req.on('close', () => {
-    clients = clients.filter(c => c.id !== client.id);
-  });
+  const remove = addSyncClient(req.query.userId, res);
+  req.on('close', remove);
 });
-
-function notifyClients(userId, resources = ['entries', 'holidays', 'config']) {
-  const payload = JSON.stringify({ type: 'update', resources });
-  clients
-    .filter(c => c.userId === userId)
-    .forEach(client => client.res.write(`data: ${payload}\n\n`));
-}
-
-function isTransactionUnsupported(err) {
-  if (!err) return false;
-  return (
-    err.code === 20
-    || err.codeName === 'IllegalOperation'
-    || /Transaction numbers are only allowed/i.test(err.message || '')
-    || /replica set member or mongos/i.test(err.message || '')
-  );
-}
-
-async function withOptionalTransaction(work) {
-  const session = await mongoose.startSession();
-  let usedTransaction = false;
-  try {
-    let result;
-    try {
-      await session.withTransaction(async () => {
-        usedTransaction = true;
-        result = await work(session);
-      });
-      return { result, usedTransaction };
-    } catch (err) {
-      if (!isTransactionUnsupported(err)) throw err;
-      usedTransaction = false;
-      result = await work(null);
-      return { result, usedTransaction };
-    }
-  } finally {
-    await session.endSession();
-  }
-}
 
 async function writeAuditEvent(event, session = null) {
   await AuditEvent.create([{
