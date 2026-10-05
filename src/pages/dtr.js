@@ -1,4 +1,5 @@
 import { store } from '../store.js';
+import { ensureYearHolidays } from './holiday-refresh.js';
 import { getDayName, getDaysInMonth, MONTHS, ICONS, fmtTimeStr, requestRender } from '../utils.js';
 import { getScheduledNonWorkingStatus } from '../../shared/work-schedule.js';
 
@@ -12,14 +13,7 @@ let monthError = '';
 let monthRequestId = 0;
 
 async function ensureVisibleYearHolidays(force = false) {
-  if (!store.userId) return;
-
-  try {
-    const holidays = await store.refreshHolidays([selYear], { force });
-    if (!Array.isArray(holidays)) return;
-  } catch (err) {
-    console.error('[DTR] Failed to refresh holidays for visible year:', err);
-  }
+  return ensureYearHolidays(selYear, { force, logTag: 'DTR' });
 }
 
 function getMonthBounds(year, month) {
