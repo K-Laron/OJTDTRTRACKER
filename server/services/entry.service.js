@@ -9,12 +9,7 @@ import {
 import { withOptionalTransaction } from '../db.js';
 import { notifyClients } from '../sync-hub.js';
 import { writeAuditEvent } from './audit.service.js';
-
-function cleanEntryForAudit(entry) {
-  if (!entry) return null;
-  const { _id, __v, userId, ...rest } = entry;
-  return rest;
-}
+import { cleanEntryForAudit } from './snapshots.js';
 
 async function getUserSettings(userId, session = null) {
   const query = Config.findOne({ userId });
