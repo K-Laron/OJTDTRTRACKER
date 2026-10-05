@@ -1,4 +1,5 @@
 import { isScheduledWorkday } from '../shared/work-schedule.js';
+import { countWorkingDays } from '../shared/forecast.js';
 import {
   calculateHours as sharedCalculateHours,
   parseTimeStrict,
@@ -362,31 +363,20 @@ export function calculateCompletionForecast({ today, requiredHours, entries = []
     normalizeStatus(entry?.status, (entry?.amTimeIn || entry?.pmTimeIn || entry?.hoursRendered) ? 'present' : 'absent'),
   ]));
   const workingDaysRemaining = Math.ceil(remainingHours / avgPerDay);
-  const excludedDates = [];
-  const cursor = new Date(`${normalizedToday}T00:00:00`);
-  let countedDays = 0;
-
-  while (countedDays < workingDaysRemaining) {
-    cursor.setDate(cursor.getDate() + 1);
-    const isoDate = toLocalDateString(cursor);
-    const status = statusesByDate.get(isoDate) || '';
-
-    if (!isScheduledWorkday(isoDate)) {
-      continue;
-    }
-    if (isExcludedWorkdayStatus(status)) {
-      excludedDates.push({ date: isoDate, status });
-      continue;
-    }
-    countedDays += 1;
-  }
+  const { estimatedDate, excludedDates } = countWorkingDays({
+    startDate: normalizedToday,
+    daysNeeded: workingDaysRemaining,
+    statusByDate: statusesByDate,
+    isWorkday: isScheduledWorkday,
+    isExcluded: (status) => isExcludedWorkdayStatus(status || ''),
+  });
 
   return {
     avgPerDay,
     remainingHours,
     workingDaysRemaining,
     neededAvgHoursPerDay: remainingHours / workingDaysRemaining,
-    estimatedDate: toLocalDateString(cursor),
+    estimatedDate,
     excludedDates,
   };
 }
