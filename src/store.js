@@ -1,4 +1,5 @@
 import { getScheduledNonWorkingStatus, isScheduledWorkday } from '../shared/work-schedule.js';
+import { request as apiRequest } from './api/client.js';
 
 const DEFAULT_STATE = {
   profile: {
@@ -303,24 +304,7 @@ class Store {
   }
 
   async _request(path, options = {}, { logoutOn401 = false } = {}) {
-    const res = await fetch(`${API_BASE}${path}`, options);
-    const contentType = res.headers.get('content-type') || '';
-    const data = contentType.includes('application/json')
-      ? await res.json().catch(() => null)
-      : await res.text().catch(() => '');
-
-    if (res.status === 401 && logoutOn401) {
-      this.logout();
-    }
-
-    if (!res.ok) {
-      const error = new Error(data?.error || (typeof data === 'string' && data) || `Request failed (${res.status})`);
-      error.status = res.status;
-      error.data = data;
-      throw error;
-    }
-
-    return data;
+    return apiRequest(path, options, logoutOn401 ? { on401: () => this.logout() } : undefined);
   }
 
   startPolling() {

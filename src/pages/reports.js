@@ -1,4 +1,5 @@
 import { store } from '../store.js';
+import { request as apiRequest } from '../api/client.js';
 import { closeModal, fmtDate, fmtHours, fmtMinutes, fmtTimeStr, MONTHS, openModal, toast, ICONS, requestRender } from '../utils.js';
 
 let activeTab = 'overview';
@@ -335,12 +336,11 @@ async function loadAuditEvents() {
   auditLoaded = false;
   auditError = '';
   try {
-    const res = await fetch('/api/audit?limit=50', {
+    const data = await apiRequest('/audit?limit=50', {
       headers: { 'X-User-Id': store.userId }
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data?.error || 'Failed to load activity');
-    auditEvents = Array.isArray(data) ? data : [];
+    if (!Array.isArray(data)) throw new Error('Failed to load activity');
+    auditEvents = data;
   } catch (err) {
     auditError = err.message || 'Failed to load activity';
   } finally {
