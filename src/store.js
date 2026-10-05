@@ -91,6 +91,8 @@ class Store {
     this.initSequence = 0;
     this.sortedEntriesCache = [];
     this.sortedEntriesCacheVersion = -1;
+    this.derivedStatusCache = [];
+    this.derivedStatusCacheVersion = -1;
     this.entryDateCache = new Map();
     this.entryDateCacheVersion = -1;
     this.monthEntriesCache = new Map();
@@ -156,6 +158,7 @@ class Store {
 
   _invalidateEntryCaches() {
     this.sortedEntriesCacheVersion = -1;
+    this.derivedStatusCacheVersion = -1;
     this.entryDateCache = new Map();
     this.entryDateCacheVersion = -1;
     this.monthEntriesCache.clear();
@@ -611,7 +614,12 @@ class Store {
   }
 
   getAllEntriesWithDerivedStatus() {
-    return this.getAllEntries().map(entry => ({ ...entry, status: normalizeEntryStatus(entry) }));
+    const entriesVersion = this.getResourceVersion('entries');
+    if (this.derivedStatusCacheVersion !== entriesVersion) {
+      this.derivedStatusCache = this.getAllEntries().map(entry => ({ ...entry, status: normalizeEntryStatus(entry) }));
+      this.derivedStatusCacheVersion = entriesVersion;
+    }
+    return this.derivedStatusCache;
   }
 
   async fetchEntries({ dateFrom, dateTo, page, limit } = {}) {
