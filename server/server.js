@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import { AuditEvent, User, Entry, Holiday, Config } from './models.js';
 import { syncPhilippinePublicHolidays } from './holiday-sync.js';
 import { connectDb, isTransactionUnsupported, withOptionalTransaction } from './db.js';
+import { migrateIndexes } from './migrate-indexes.js';
 import { addSyncClient, notifyClients } from './sync-hub.js';
 import {
   buildImportPreview,
@@ -28,6 +29,7 @@ app.use(express.json({ limit: '5mb' }));
 
 // Connect to MongoDB
 connectDb(MONGODB_URI)
+  .then(() => migrateIndexes().catch(err => console.error('Index migration error:', err)))
   .then(() => console.log('Connected to MongoDB'))
   .catch(err => console.error('MongoDB connection error:', err));
 
