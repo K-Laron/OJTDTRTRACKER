@@ -18,8 +18,14 @@ export function exportDTRtoExcel(entries, holidays, month, year, profile, settin
     ];
 
     const daysInMonth = getDaysInMonth(year, month);
-    const entriesByDate = new Map(entries.map(entry => [entry.date, entry]));
-    const holidaysByDate = new Map(holidays.map(holiday => [holiday.date, holiday]));
+    const entriesByDate = new Map();
+    for (const entry of entries) {
+      if (!entriesByDate.has(entry.date)) entriesByDate.set(entry.date, entry);
+    }
+    const holidaysByDate = new Map();
+    for (const holiday of holidays) {
+      if (!holidaysByDate.has(holiday.date)) holidaysByDate.set(holiday.date, holiday);
+    }
     for (let d = 1; d <= daysInMonth; d++) {
       const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
       const e = entriesByDate.get(dateStr);
