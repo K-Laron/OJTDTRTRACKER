@@ -1,4 +1,5 @@
 import { store } from '../store.js';
+import { parseTimeStrict } from '../../shared/time.js';
 import {
   fmtHours,
   fmtDate,
@@ -230,11 +231,15 @@ async function saveEntry(id = null) {
     toast('At least one time in is required', 'error');
     return;
   }
-  if (isPresent && amIn && amOut && amIn >= amOut) {
+  const amInMins = parseTimeStrict(amIn);
+  const amOutMins = parseTimeStrict(amOut);
+  const pmInMins = parseTimeStrict(pmIn);
+  const pmOutMins = parseTimeStrict(pmOut);
+  if (isPresent && amInMins != null && amOutMins != null && amInMins >= amOutMins) {
     toast('AM Out must be after AM In', 'error');
     return;
   }
-  if (isPresent && pmIn && pmOut && pmIn >= pmOut) {
+  if (isPresent && pmInMins != null && pmOutMins != null && pmInMins >= pmOutMins) {
     toast('PM Out must be after PM In', 'error');
     return;
   }
