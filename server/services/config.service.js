@@ -5,23 +5,22 @@ import { writeAuditEvent } from './audit.service.js';
 import { cleanConfigForAudit } from './snapshots.js';
 
 export async function getConfig(userId) {
-  let config = await Config.findOne({ userId }).lean();
-  if (!config) {
-    const created = new Config({ userId });
-    await created.save();
-    config = created.toObject();
-  }
-  return config;
+  return Config.findOneAndUpdate(
+    { userId },
+    { $setOnInsert: { userId } },
+    { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
+  ).lean();
 }
 
 export async function updateConfig(userId, body) {
+  const { userId: _ignoredOwner, ...update } = body || {};
   const { result } = await withOptionalTransaction(async (session) => {
     const previousQuery = Config.findOne({ userId });
     if (session) previousQuery.session(session);
     const previousConfig = await previousQuery.lean();
     const config = await Config.findOneAndUpdate(
       { userId },
-      body,
+      update,
       { returnDocument: 'after', upsert: true, session: session || undefined }
     );
     await writeAuditEvent({
