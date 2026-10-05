@@ -1,19 +1,20 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { AuditEvent, User, Entry, Holiday, Config } from './models.js';
+import { User, Entry, Holiday, Config } from './models.js';
 import { syncPhilippinePublicHolidays } from './holiday-sync.js';
 import { connectDb, isTransactionUnsupported, withOptionalTransaction } from './db.js';
 import { migrateIndexes } from './migrate-indexes.js';
 import { addSyncClient, notifyClients } from './sync-hub.js';
+import { readAuditEvents, writeAuditEvent } from './services/audit.service.js';
+import { requireAuth } from './middleware/require-auth.js';
+import entriesRoutes from './routes/entries.routes.js';
+import { getErrorStatus } from './routes/errors.js';
 import {
   buildImportPreview,
   DEFAULT_SETTINGS,
-  entriesConflict,
   normalizeProfile,
   normalizeSettings,
-  resolveEntryUpdate,
-  sanitizeEntry,
   sanitizeHoliday,
   sanitizeImportPayload,
 } from './tracker-core.js';
@@ -39,28 +40,7 @@ app.get('/api/sync', (req, res) => {
   req.on('close', remove);
 });
 
-async function writeAuditEvent(event, session = null) {
-  await AuditEvent.create([{
-    ts: new Date(),
-    meta: null,
-    ...event,
-  }], session ? { session } : undefined);
-}
-
-async function readAuditEvents(userId, limit = 50) {
-  return AuditEvent
-    .find({ userId })
-    .sort({ ts: -1, _id: -1 })
-    .limit(limit)
-    .lean();
-}
-
-async function getUserSettings(userId, session = null) {
-  const query = Config.findOne({ userId });
-  if (session) query.session(session);
-  const config = await query.lean();
-  return normalizeSettings(config?.settings || DEFAULT_SETTINGS);
-}
+app.use('/api/entries', entriesRoutes);
 
 function cleanEntryForAudit(entry) {
   if (!entry) return null;
@@ -112,12 +92,6 @@ async function getUserStateSnapshot(userId, session = null) {
   };
 }
 
-function getErrorStatus(err) {
-  if (err?.code === 11000) return 400;
-  if (typeof err?.message === 'string' && err.message) return 400;
-  return 500;
-}
-
 function getHolidaySyncYears(config) {
   const currentYear = new Date().getFullYear();
   const startYear = Number.parseInt(config?.profile?.startDate?.slice(0, 4), 10);
@@ -146,16 +120,6 @@ function getRequestedHolidaySyncYears(req, config) {
 
   const fallbackYears = getHolidaySyncYears(config);
   return [...new Set([...(requestedYears.length ? requestedYears : []), ...fallbackYears])].sort((a, b) => a - b);
-}
-
-function toConflictResponse(current, resolution) {
-  return {
-    error: 'Entry changed elsewhere',
-    current,
-    conflicts: resolution.conflictingFields,
-    clientChangedFields: resolution.clientChangedFields,
-    serverChangedFields: resolution.serverChangedFields,
-  };
 }
 
 // --- API Routes ---
@@ -197,166 +161,6 @@ app.post('/api/auth/login', async (req, res) => {
   } catch (err) {
     console.error('Login error:', err);
     res.status(500).json({ error: 'Login failed' });
-  }
-});
-
-// Middleware to require userId
-function requireAuth(req, res, next) {
-  const userId = req.headers['x-user-id'];
-  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-  req.userId = userId;
-  next();
-}
-
-// Entries
-app.get('/api/entries', requireAuth, async (req, res) => {
-  try {
-    const dateFrom = typeof req.query.date_from === 'string' ? req.query.date_from : '';
-    const dateTo = typeof req.query.date_to === 'string' ? req.query.date_to : '';
-    const page = Number.parseInt(req.query.page, 10);
-    const limit = Number.parseInt(req.query.limit, 10);
-
-    const query = { userId: req.userId };
-    if (dateFrom || dateTo) {
-      query.date = {};
-      if (dateFrom) query.date.$gte = dateFrom;
-      if (dateTo) query.date.$lte = dateTo;
-    }
-
-    const entryQuery = Entry.find(query).sort({ date: -1 }).lean();
-    if (Number.isFinite(page) || Number.isFinite(limit)) {
-      const safePage = Math.max(1, Number.isFinite(page) ? page : 1);
-      const safeLimit = Math.min(500, Math.max(1, Number.isFinite(limit) ? limit : 50));
-      const [items, total] = await Promise.all([
-        entryQuery.skip((safePage - 1) * safeLimit).limit(safeLimit),
-        Entry.countDocuments(query),
-      ]);
-      return res.json({
-        items,
-        page: safePage,
-        limit: safeLimit,
-        total,
-        hasMore: safePage * safeLimit < total,
-      });
-    }
-
-    const entries = await entryQuery;
-    res.json(entries);
-  } catch (err) {
-    console.error('Fetch entries error:', err);
-    res.status(500).json({ error: 'Failed to fetch entries' });
-  }
-});
-
-app.post('/api/entries', requireAuth, async (req, res) => {
-  try {
-    const { result: entry } = await withOptionalTransaction(async (session) => {
-      const settings = await getUserSettings(req.userId, session);
-      const sanitizedEntry = sanitizeEntry(req.body, settings, { requireId: true });
-      const [createdEntry] = await Entry.create([{ ...sanitizedEntry, userId: req.userId }], session ? { session } : undefined);
-      await writeAuditEvent({
-        userId: req.userId,
-        entity: 'entry',
-        action: 'create',
-        after: cleanEntryForAudit(createdEntry.toObject()),
-      }, session);
-      return createdEntry;
-    });
-    notifyClients(req.userId, ['entries']);
-    res.json(entry);
-  } catch (err) {
-    console.error('Add entry error:', err);
-    res.status(getErrorStatus(err)).json({ error: err.message || 'Failed to add entry' });
-  }
-});
-
-app.put('/api/entries/:id', requireAuth, async (req, res) => {
-  try {
-    const { previousState, ...updates } = req.body || {};
-    const { result } = await withOptionalTransaction(async (session) => {
-      const currentQuery = Entry.findOne({ id: req.params.id, userId: req.userId });
-      if (session) currentQuery.session(session);
-      const current = await currentQuery;
-      if (!current) return { status: 404, body: { error: 'Entry not found' } };
-
-      const settings = await getUserSettings(req.userId, session);
-      const resolution = resolveEntryUpdate(current.toObject(), previousState, updates, settings);
-      if (resolution.type === 'conflict') {
-        return {
-          status: 409,
-          body: toConflictResponse(current.toObject(), resolution),
-        };
-      }
-
-      current.set(resolution.entry);
-      await current.save(session ? { session } : undefined);
-      await writeAuditEvent({
-        userId: req.userId,
-        entity: 'entry',
-        action: resolution.type === 'merged' ? 'merge' : 'update',
-        before: cleanEntryForAudit(previousState || {}),
-        after: cleanEntryForAudit(current.toObject()),
-        meta: resolution.type === 'merged'
-          ? {
-              mergedFields: resolution.clientChangedFields,
-              serverChangedFields: resolution.serverChangedFields,
-            }
-          : null,
-      }, session);
-      return { status: 200, body: current.toObject() };
-    });
-
-    if (result.status !== 200) {
-      return res.status(result.status).json(result.body);
-    }
-    notifyClients(req.userId, ['entries']);
-    res.json(result.body);
-  } catch (err) {
-    console.error('Update entry error:', err);
-    res.status(getErrorStatus(err)).json({ error: err.message || 'Failed to update entry' });
-  }
-});
-
-app.delete('/api/entries/:id', requireAuth, async (req, res) => {
-  try {
-    const previousState = req.body?.previousState;
-    const force = req.body?.force === true;
-    const { result } = await withOptionalTransaction(async (session) => {
-      const currentQuery = Entry.findOne({ id: req.params.id, userId: req.userId });
-      if (session) currentQuery.session(session);
-      const current = await currentQuery;
-      if (!current) return { status: 404, body: { error: 'Entry not found' } };
-
-      const currentObject = current.toObject();
-      if (entriesConflict(currentObject, previousState) && !force) {
-        return {
-          status: 409,
-          body: {
-            error: 'Entry changed elsewhere',
-            current: currentObject,
-            conflicts: ['delete'],
-          },
-        };
-      }
-
-      await current.deleteOne(session ? { session } : undefined);
-      await writeAuditEvent({
-        userId: req.userId,
-        entity: 'entry',
-        action: force && entriesConflict(currentObject, previousState) ? 'force-delete' : 'delete',
-        before: cleanEntryForAudit(currentObject),
-      }, session);
-      return { status: 200, body: { success: true } };
-    });
-
-    if (result.status !== 200) {
-      return res.status(result.status).json(result.body);
-    }
-    notifyClients(req.userId, ['entries']);
-    res.json(result.body);
-  } catch (err) {
-    console.error('Delete entry error:', err);
-    res.status(getErrorStatus(err)).json({ error: err.message || 'Failed to delete entry' });
   }
 });
 
