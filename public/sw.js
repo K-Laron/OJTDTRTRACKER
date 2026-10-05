@@ -1,6 +1,12 @@
 const CACHE = 'dtr-v1';
 self.addEventListener('install', e => { self.skipWaiting(); });
-self.addEventListener('activate', e => { e.waitUntil(clients.claim()); });
+self.addEventListener('activate', e => {
+  e.waitUntil(
+    caches.keys()
+      .then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key))))
+      .then(() => clients.claim())
+  );
+});
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (url.pathname.toLowerCase().startsWith('/api/')) {

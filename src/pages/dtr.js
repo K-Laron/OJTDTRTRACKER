@@ -1,5 +1,6 @@
 import { store } from '../store.js';
 import { ensureYearHolidays } from './holiday-refresh.js';
+import { formatHolidayTypeLabel } from '../../shared/labels.js';
 import { getDayName, getDaysInMonth, MONTHS, ICONS, fmtTimeStr, requestRender } from '../utils.js';
 import { getScheduledNonWorkingStatus } from '../../shared/work-schedule.js';
 
@@ -116,7 +117,7 @@ function renderSheetContent() {
       : (holiday
         ? (holiday.type === 'holiday' ? 'holiday' : holiday.type === 'vacation_leave' ? 'vacation' : 'leave')
         : getScheduledNonWorkingStatus(dateStr));
-    const holidayLabel = derivedStatus ? derivedStatus.replace('_', ' ').replace(/\b\w/g, char => char.toUpperCase()) : '';
+    const holidayLabel = derivedStatus ? formatHolidayTypeLabel(derivedStatus) : '';
     const isPresent = !derivedStatus || derivedStatus === 'present';
     const activityText = entry?.activities || holiday?.name || '';
     const remarksText = entry?.remarks || holidayLabel || '';

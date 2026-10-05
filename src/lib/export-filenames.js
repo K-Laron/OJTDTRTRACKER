@@ -1,5 +1,6 @@
+import { MONTHS } from '../../shared/labels.js';
+
 const FALLBACK_PROFILE_SEGMENT = 'OJT_Trainee';
-const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
 function sanitizeSegment(value, fallback = '') {
   const normalized = String(value || '')
