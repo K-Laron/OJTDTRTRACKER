@@ -2,13 +2,15 @@ import mongoose from 'mongoose';
 
 const userSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true },
-  password: { type: String, required: true }, // Simple plain-text or lightweight hash for this use case
+  // ponytail: plain-text password kept for local single-user flow. Hash with
+  // bcrypt plus a migration before any hosted or multi-device use.
+  password: { type: String, required: true },
   createdAt: { type: Date, default: Date.now }
 });
 
 const entrySchema = new mongoose.Schema({
   userId: { type: String, required: true },
-  id: { type: String, required: true, unique: true },
+  id: { type: String, required: true },
   date: { type: String, required: true },
   status: {
     type: String,
@@ -74,7 +76,8 @@ const auditEventSchema = new mongoose.Schema({
 });
 
 entrySchema.index({ userId: 1, date: -1 });
-holidaySchema.index({ userId: 1, date: 1 });
+entrySchema.index({ userId: 1, id: 1 }, { unique: true });
+holidaySchema.index({ userId: 1, date: 1 }, { unique: true });
 auditEventSchema.index({ userId: 1, ts: -1, _id: -1 });
 
 export const User = mongoose.model('User', userSchema);
