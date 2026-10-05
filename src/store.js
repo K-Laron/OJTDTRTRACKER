@@ -1,4 +1,5 @@
 import { getScheduledNonWorkingStatus, isScheduledWorkday } from '../shared/work-schedule.js';
+import { countWorkingDays } from '../shared/forecast.js';
 import { request as apiRequest } from './api/client.js';
 
 const DEFAULT_STATE = {
@@ -976,29 +977,20 @@ class Store {
     });
 
     const workingDaysRemaining = Math.ceil(remainingHours / avgPerDay);
-    const excludedDates = [];
-    const cursor = new Date(`${today}T00:00:00`);
-    let countedDays = 0;
-
-    while (countedDays < workingDaysRemaining) {
-      cursor.setDate(cursor.getDate() + 1);
-      const dateKey = toLocalDateString(cursor);
-      const status = statusByDate.get(dateKey);
-
-      if (!isWeekday(dateKey)) continue;
-      if (NON_WORKING_STATUSES.has(status) && status !== 'absent') {
-        excludedDates.push({ date: dateKey, status });
-        continue;
-      }
-      countedDays += 1;
-    }
+    const { estimatedDate, excludedDates } = countWorkingDays({
+      startDate: today,
+      daysNeeded: workingDaysRemaining,
+      statusByDate,
+      isWorkday: isWeekday,
+      isExcluded: (status) => NON_WORKING_STATUSES.has(status) && status !== 'absent',
+    });
 
     return {
       avgPerDay,
       remainingHours,
       workingDaysRemaining,
       neededAvgHoursPerDay: remainingHours / workingDaysRemaining,
-      estimatedDate: toLocalDateString(cursor),
+      estimatedDate,
       excludedDates,
     };
   }
