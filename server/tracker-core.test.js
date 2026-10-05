@@ -5,6 +5,7 @@ import {
   calculateCompletionForecast,
   DEFAULT_SETTINGS,
   entriesConflict,
+  normalizeSettings,
   resolveEntryUpdate,
   sanitizeEntry,
   sanitizeHoliday,
@@ -310,4 +311,81 @@ test('calculateCompletionForecast skips Fridays after the four-day workweek star
   assert.equal(forecast.remainingHours, 8);
   assert.equal(forecast.workingDaysRemaining, 1);
   assert.equal(forecast.estimatedDate, '2026-03-16');
+});
+
+test('resolveEntryUpdate applies direct updates when previousState is missing', () => {
+  const current = {
+    id: 'entry-direct',
+    date: '2026-03-21',
+    status: 'present',
+    amTimeIn: '08:00',
+    amTimeOut: '12:00',
+    pmTimeIn: '',
+    pmTimeOut: '',
+    remarks: '',
+    activities: '',
+    createdAt: '2026-03-21T00:00:00.000Z',
+  };
+  const result = resolveEntryUpdate(current, null, { remarks: 'hello' }, DEFAULT_SETTINGS);
+  assert.equal(result.type, 'direct');
+  assert.deepEqual(result.conflictingFields, []);
+});
+
+test('resolveEntryUpdate revalidates merged entries and throws on invalid time', () => {
+  const previous = {
+    id: 'entry-bad-merge',
+    date: '2026-03-21',
+    status: 'present',
+    amTimeIn: '08:00',
+    amTimeOut: '12:00',
+    pmTimeIn: '',
+    pmTimeOut: '',
+    remarks: '',
+    activities: '',
+    createdAt: '2026-03-21T00:00:00.000Z',
+  };
+  const current = { ...previous };
+  assert.throws(() => {
+    resolveEntryUpdate(current, { ...previous, remarks: 'x' }, { amTimeIn: 'bad' }, DEFAULT_SETTINGS);
+  });
+});
+
+test('calculateCompletionForecast returns null with no present entries', () => {
+  const forecast = calculateCompletionForecast({
+    today: '2026-04-06',
+    requiredHours: 40,
+    entries: [{ date: '2026-04-01', status: 'leave', hoursRendered: 0 }],
+  });
+  assert.equal(forecast, null);
+});
+
+test('calculateCompletionForecast returns zero remaining when requirement is met', () => {
+  const forecast = calculateCompletionForecast({
+    today: '2026-04-06',
+    requiredHours: 16,
+    entries: [
+      { date: '2026-04-01', status: 'present', hoursRendered: 8 },
+      { date: '2026-04-02', status: 'present', hoursRendered: 8 },
+    ],
+  });
+  assert.equal(forecast.remainingHours, 0);
+  assert.equal(forecast.workingDaysRemaining, 0);
+  assert.equal(forecast.estimatedDate, '2026-04-06');
+});
+
+test('normalizeSettings rejects invalid lastBackupDate with field error', () => {
+  assert.throws(() => {
+    normalizeSettings({ lastBackupDate: 'not-a-date' });
+  }, /Last Backup Date is invalid/);
+});
+
+test('sanitizeEntry uses injected now for createdAt', () => {
+  const entry = sanitizeEntry({
+    id: 'entry-now',
+    date: '2026-04-01',
+    status: 'present',
+    amTimeIn: '08:00',
+    amTimeOut: '12:00',
+  }, DEFAULT_SETTINGS, { now: '2026-04-01T00:00:00.000Z' });
+  assert.equal(entry.createdAt, '2026-04-01T00:00:00.000Z');
 });
