@@ -1,4 +1,5 @@
 import { store } from '../store.js';
+import { ensureYearHolidays } from './holiday-refresh.js';
 import { fmtHours, getDayName, getDaysInMonth, MONTHS, ICONS,
   openModal, closeModal, confirmDialog, toast, getCurrentDate, fmtDate, fmtTimeStr, requestRender } from '../utils.js';
 
@@ -7,14 +8,7 @@ let selMonth = new Date().getMonth();
 let forcedHolidayRefreshKey = '';
 
 async function ensureVisibleYearHolidays(force = false) {
-  if (!store.userId) return;
-
-  try {
-    const holidays = await store.refreshHolidays([selYear], { force });
-    if (!Array.isArray(holidays)) return;
-  } catch (err) {
-    console.error('[Calendar] Failed to refresh holidays for visible year:', err);
-  }
+  return ensureYearHolidays(selYear, { force, logTag: 'Calendar' });
 }
 
 function getCalendarContext() {

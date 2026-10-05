@@ -1030,7 +1030,12 @@ class Store {
   }
 
   getActivityTemplates() {
-    const saved = JSON.parse(localStorage.getItem('dtr_activity_templates') || 'null');
+    let saved = null;
+    try {
+      saved = JSON.parse(localStorage.getItem('dtr_activity_templates') || 'null');
+    } catch {
+      saved = null;
+    }
     return Array.isArray(saved) && saved.length ? saved : DEFAULT_ACTIVITY_TEMPLATES;
   }
 
