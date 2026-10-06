@@ -106,6 +106,10 @@ class Store {
     this.alertsCacheVersion = -1;
     this.summaryPackCache = null;
     this.summaryPackCacheKey = '';
+    this.statusSummaryCache = new Map();
+    this.attendanceCache = new Map();
+    this.forecastCache = null;
+    this.forecastCacheKey = '';
     this.trendDataCache = null;
     this.trendDataCacheVersion = -1;
     this.pendingLocalSyncSkips = 0;
@@ -173,6 +177,10 @@ class Store {
     this.alertsCacheVersion = -1;
     this.summaryPackCache = null;
     this.summaryPackCacheKey = '';
+    this.statusSummaryCache.clear();
+    this.attendanceCache.clear();
+    this.forecastCache = null;
+    this.forecastCacheKey = '';
     this.trendDataCache = null;
     this.trendDataCacheVersion = -1;
   }
@@ -181,6 +189,10 @@ class Store {
     this.holidayDateCache = new Map();
     this.holidayDateCacheVersion = -1;
     this.monthHolidaysCache.clear();
+    this.statusSummaryCache.clear();
+    this.attendanceCache.clear();
+    this.forecastCache = null;
+    this.forecastCacheKey = '';
   }
 
   _markResourcesChanged(resources = []) {
@@ -197,6 +209,10 @@ class Store {
     }
     if (uniqueResources.includes('holidays')) {
       this._invalidateHolidayCaches();
+    }
+    if (uniqueResources.includes('config')) {
+      this.forecastCache = null;
+      this.forecastCacheKey = '';
     }
     return uniqueResources;
   }
@@ -893,6 +909,10 @@ class Store {
   getWeeklyTrendData() { return this._getTrendData().weekly; }
 
   getStatusSummary(year, month) {
+    const cacheKey = `${this.getResourceVersion('entries')}:${this.getResourceVersion('holidays')}:${year ?? ''}:${month ?? ''}`;
+    const cached = this.statusSummaryCache.get(cacheKey);
+    if (cached) return cached;
+
     const summary = {
       present: 0,
       leave: 0,
@@ -916,10 +936,15 @@ class Store {
       else summary.leave += 1;
     });
 
+    this.statusSummaryCache.set(cacheKey, summary);
     return summary;
   }
 
   getAttendanceSummary(year, month) {
+    const cacheKey = `${this.getResourceVersion('entries')}:${this.getResourceVersion('holidays')}:${year ?? ''}:${month ?? ''}`;
+    const cached = this.attendanceCache.get(cacheKey);
+    if (cached) return cached;
+
     const entries = year != null ? this.getEntriesByMonth(year, month) : this.state.entries;
     const statusSummary = this.getStatusSummary(year, month);
     let present = 0, late = 0;
@@ -928,12 +953,14 @@ class Store {
       if (status === 'present' && (e.amTimeOut || e.pmTimeOut)) present++;
       if (status === 'present' && e.lateMinutes > 0) late++;
     });
-    return {
+    const attendance = {
       present,
       late,
       onLeave: statusSummary.leave + statusSummary.vacation + statusSummary.no_ojt,
       holidays: statusSummary.holiday,
     };
+    this.attendanceCache.set(cacheKey, attendance);
+    return attendance;
   }
 
   getCompletionEstimate() {
@@ -950,6 +977,17 @@ class Store {
   }
 
   getCompletionForecast(today = toLocalDateString(new Date())) {
+    const cacheKey = `${this.getResourceVersion('entries')}:${this.getResourceVersion('config')}:${today}`;
+    if (this.forecastCacheKey === cacheKey) {
+      return this.forecastCache;
+    }
+    const forecast = this._computeCompletionForecast(today);
+    this.forecastCache = forecast;
+    this.forecastCacheKey = cacheKey;
+    return forecast;
+  }
+
+  _computeCompletionForecast(today) {
     const presentEntries = this.state.entries
       .map(entry => ({ ...entry, status: normalizeEntryStatus(entry) }))
       .filter(entry => entry.status === 'present' && (parseFloat(entry.hoursRendered) || 0) > 0);
