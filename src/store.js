@@ -148,6 +148,23 @@ class Store {
       hasMore = Boolean(chunk.hasMore);
       page += 1;
     }
+    if (page > 2) {
+      // Reconcile: entries created mid-load sort onto page 1 and would be missed.
+      const reconcile = await this._request(pagePath(1), { headers }, { logoutOn401: true });
+      if (!isCurrent()) return null;
+      const fresh = Array.isArray(reconcile) ? reconcile : (reconcile.items || []);
+      const head = [];
+      for (const entry of fresh) {
+        if (entry?.id && !byId.has(entry.id)) {
+          byId.set(entry.id, entry);
+          head.push(entry);
+        }
+      }
+      if (head.length) {
+        const headIds = new Set(head.map(entry => entry.id));
+        return [...head, ...[...byId.values()].filter(entry => !headIds.has(entry.id))];
+      }
+    }
     return [...byId.values()];
   }
 
