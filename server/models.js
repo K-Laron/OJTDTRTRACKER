@@ -72,7 +72,10 @@ const auditEventSchema = new mongoose.Schema({
   before: { type: mongoose.Schema.Types.Mixed, default: null },
   after: { type: mongoose.Schema.Types.Mixed, default: null },
   meta: { type: mongoose.Schema.Types.Mixed, default: null },
-  ts: { type: Date, default: Date.now, index: true },
+  // Audit log retention: events expire 730 days after ts so the
+  // per-user collection stays bounded. Restore points older than
+  // that disappear with their events.
+  ts: { type: Date, default: Date.now, index: true, expires: '730d' },
 });
 
 entrySchema.index({ userId: 1, date: -1 });
