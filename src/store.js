@@ -26,6 +26,7 @@ const DEFAULT_STATE = {
 };
 
 const API_BASE = '/api';
+const INIT_PAGE_LIMIT = 500;
 const ENTRY_STATUSES = new Set(['present', 'leave', 'vacation', 'holiday', 'no_ojt', 'absent']);
 const NON_WORKING_STATUSES = new Set(['leave', 'vacation', 'holiday', 'no_ojt', 'absent']);
 const DEFAULT_ACTIVITY_TEMPLATES = [
@@ -124,6 +125,53 @@ class Store {
     }
   }
 
+  async _fetchAllEntries(headers, isCurrent) {
+    const pagePath = (page) => `/entries?page=${page}&limit=${INIT_PAGE_LIMIT}`;
+    const first = await this._request(pagePath(1), { headers }, { logoutOn401: true });
+    if (!isCurrent()) return null;
+    if (Array.isArray(first)) return first;
+
+    const byId = new Map();
+    for (const entry of first.items || []) {
+      if (entry?.id && !byId.has(entry.id)) byId.set(entry.id, entry);
+    }
+    let page = 2;
+    let hasMore = Boolean(first.hasMore);
+    while (hasMore) {
+      const chunk = await this._request(pagePath(page), { headers }, { logoutOn401: true });
+      if (!isCurrent()) return null;
+      if (Array.isArray(chunk)) {
+        for (const entry of chunk) {
+          if (entry?.id && !byId.has(entry.id)) byId.set(entry.id, entry);
+        }
+        break;
+      }
+      for (const entry of chunk.items || []) {
+        if (entry?.id && !byId.has(entry.id)) byId.set(entry.id, entry);
+      }
+      hasMore = Boolean(chunk.hasMore);
+      page += 1;
+    }
+    if (page > 2) {
+      // Reconcile: entries created mid-load sort onto page 1 and would be missed.
+      const reconcile = await this._request(pagePath(1), { headers }, { logoutOn401: true });
+      if (!isCurrent()) return null;
+      const fresh = Array.isArray(reconcile) ? reconcile : (reconcile.items || []);
+      const head = [];
+      for (const entry of fresh) {
+        if (entry?.id && !byId.has(entry.id)) {
+          byId.set(entry.id, entry);
+          head.push(entry);
+        }
+      }
+      if (head.length) {
+        const headIds = new Set(head.map(entry => entry.id));
+        return [...head, ...[...byId.values()].filter(entry => !headIds.has(entry.id))];
+      }
+    }
+    return [...byId.values()];
+  }
+
   async init() {
     if (!this.userId) return;
     const sequence = ++this.initSequence;
@@ -133,13 +181,14 @@ class Store {
     this._notify({ resources: ['hydration'], forceRender: true });
     try {
       const headers = { 'X-User-Id': this.userId };
+      const isCurrent = () => sequence === this.initSequence && !!this.userId;
       const [entries, holidays, config] = await Promise.all([
-        this._request('/entries', { headers }, { logoutOn401: true }),
+        this._fetchAllEntries(headers, isCurrent),
         this._request('/holidays', { headers }, { logoutOn401: true }),
         this._request('/config', { headers }, { logoutOn401: true })
       ]);
 
-      if (sequence !== this.initSequence || dataVersionAtStart !== this.dataVersion || !this.userId) {
+      if (!entries || sequence !== this.initSequence || dataVersionAtStart !== this.dataVersion || !this.userId) {
         return;
       }
 
