@@ -11,7 +11,9 @@ export async function ensureYearHolidays(year, { force = false, logTag = 'Calend
   }
   try {
     const holidays = await store.refreshHolidays([year], { force });
-    if (Array.isArray(holidays)) lastRefreshByUserYear.set(key, Date.now());
+    // Stamp only forced fetches. Skipped refreshes return cached data and
+    // must not slide the window, or a long-lived tab never revalidates.
+    if (force && Array.isArray(holidays)) lastRefreshByUserYear.set(key, Date.now());
   } catch (err) {
     console.error(`[${logTag}] Failed to refresh holidays for visible year:`, err);
   }
