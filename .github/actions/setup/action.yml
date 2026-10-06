@@ -1,0 +1,20 @@
+name: setup
+description: Checkout-ready Node setup with npm cache and install.
+
+inputs:
+  node-version:
+    description: Node.js version
+    required: false
+    default: "22"
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: npm
+    - name: Install dependencies
+      shell: bash
+      run: npm ci
