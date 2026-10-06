@@ -3,6 +3,9 @@ const LEGACY_INDEXES = [
   { collection: 'entries', name: 'id_1', dropWhen: () => true },
   // holidays: old non-unique userId_1_date_1 replaced by unique compound
   { collection: 'holidays', name: 'userId_1_date_1', dropWhen: (existing) => !existing.unique },
+  // auditevents: old non-TTL ts_1 replaced by 730-day TTL (Mongoose pluralizes
+  // the AuditEvent model name without camelcase splitting)
+  { collection: 'auditevents', name: 'ts_1', dropWhen: (existing) => !('expireAfterSeconds' in existing) },
 ];
 
 // Drops stale indexes left by earlier schemas so Mongoose can recreate them

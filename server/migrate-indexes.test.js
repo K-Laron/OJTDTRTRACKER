@@ -41,6 +41,16 @@ test('migrateIndexes keeps an already unique holiday index', async () => {
   assert.deepEqual(db.dropped, []);
 });
 
+test('migrateIndexes drops a non-TTL audit ts index but keeps a TTL one', async () => {
+  const plain = stubDb({ auditevents: [{ name: 'ts_1' }] });
+  await migrateIndexes(plain);
+  assert.deepEqual(plain.dropped, ['auditevents.ts_1']);
+
+  const ttl = stubDb({ auditevents: [{ name: 'ts_1', expireAfterSeconds: 63072000 }] });
+  await migrateIndexes(ttl);
+  assert.deepEqual(ttl.dropped, []);
+});
+
 test('migrateIndexes ignores missing collections', async () => {
   const db = stubDb({});
   await migrateIndexes(db);
