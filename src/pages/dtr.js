@@ -290,7 +290,7 @@ export function mount(container) {
   if (!root) return;
   bindDtrEvents(root);
   refreshDtr(root);
-  void ensureVisibleYearHolidays(true);
+  void ensureVisibleYearHolidays();
   void loadMonthEntries();
 }
 
