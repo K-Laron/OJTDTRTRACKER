@@ -1,7 +1,8 @@
 import { store } from '../store.js';
 import { fmtHours, fmtMinutes, fmtDate, getDayName, getCurrentDate, getCurrentTime,
-  calculateEntryHours, calculateOvertime, calculateLate, calculateUndertime,
+  calculateEntryHours, calculateLate, calculateUndertime,
   toast, ICONS, fmtTimeStr } from '../utils.js';
+import { calculateOvertimeForDate, getScheduledWorkWindow } from '../../shared/work-schedule.js';
 
 let clockIntervalId = null;
 
@@ -145,26 +146,28 @@ export function render() {
 }
 
 export function mount() {
-  const s = store.state.settings;
   const btn = document.getElementById('btn-clock');
   if (btn) {
     btn.addEventListener('click', async () => {
       try {
         const today = getCurrentDate(), now = getCurrentTime();
+        // Read the schedule inside the handler so a settings change made on
+        // the settings page applies to the next clock action without a reload.
+        const schedule = getScheduledWorkWindow(today, store.state.settings);
         const { phase, entry } = store.getClockPhase(today);
         if (phase === 0) {
-          await store.addEntry({ date: today, status: 'present', amTimeIn: now, amTimeOut: '', pmTimeIn: '', pmTimeOut: '', hoursRendered: 0, overtimeHours: 0, lateMinutes: calculateLate(now, s.expectedTimeIn), undertimeMinutes: 0, remarks: '', activities: '' });
+          await store.addEntry({ date: today, status: 'present', amTimeIn: now, amTimeOut: '', pmTimeIn: '', pmTimeOut: '', hoursRendered: 0, overtimeHours: 0, lateMinutes: calculateLate(now, schedule.expectedTimeIn), undertimeMinutes: 0, remarks: '', activities: '' });
           toast('AM Clocked In!', 'success');
         } else if (phase === 1) {
           const hrs = calculateEntryHours({ ...entry, amTimeOut: now });
-          await store.updateEntry(entry.id, { amTimeOut: now, hoursRendered: hrs, overtimeHours: calculateOvertime(hrs) });
+          await store.updateEntry(entry.id, { amTimeOut: now, hoursRendered: hrs, overtimeHours: calculateOvertimeForDate(today, hrs) });
           toast('AM Clocked Out!', 'success');
         } else if (phase === 2) {
           await store.updateEntry(entry.id, { pmTimeIn: now });
           toast('PM Clocked In!', 'success');
         } else if (phase === 3) {
           const hrs = calculateEntryHours({ ...entry, pmTimeOut: now });
-          await store.updateEntry(entry.id, { pmTimeOut: now, hoursRendered: hrs, overtimeHours: calculateOvertime(hrs), undertimeMinutes: calculateUndertime(now, s.expectedTimeOut) });
+          await store.updateEntry(entry.id, { pmTimeOut: now, hoursRendered: hrs, overtimeHours: calculateOvertimeForDate(today, hrs), undertimeMinutes: calculateUndertime(now, schedule.expectedTimeOut) });
           toast('PM Clocked Out! ' + fmtHours(hrs) + ' recorded.', 'success');
         }
       } catch (err) {

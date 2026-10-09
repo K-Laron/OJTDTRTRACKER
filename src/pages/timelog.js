@@ -1,5 +1,6 @@
 import { store } from '../store.js';
 import { parseTimeStrict } from '../../shared/time.js';
+import { calculateOvertimeForDate, getScheduledWorkWindow } from '../../shared/work-schedule.js';
 import {
   fmtHours,
   fmtDate,
@@ -11,10 +12,10 @@ import {
   closeModal,
   confirmDialog,
   calculateEntryHours,
-  calculateOvertime,
   calculateLate,
   calculateUndertime,
   fmtMinutes,
+  formatOvertimeDuration,
   ICONS,
   fmtTimeStr,
   requestRender,
@@ -88,10 +89,93 @@ function entryForm(entry = null) {
       <div class="form-row">
         <div class="form-group"><label>Remarks</label><input type="text" id="entry-remarks" value="${entry?.remarks || ''}" placeholder="Optional"></div>
       </div>
+      <div class="entry-derived-preview" id="entry-derived-preview"></div>
       <div class="form-group"><label>Activities / Tasks Done</label><textarea id="entry-activities" placeholder="What did you work on today?">${entry?.activities || ''}</textarea></div>
     </div>
     <div class="modal-footer"><button class="btn btn-ghost modal-cancel-btn">Cancel</button><button class="btn btn-primary" id="entry-save">${isEdit ? 'Save Changes' : 'Add Entry'}</button></div>
   `;
+}
+
+const DRAFT_FIELD_IDS = ['entry-status', 'entry-date', 'entry-am-in', 'entry-am-out', 'entry-pm-in', 'entry-pm-out'];
+
+function readEntryDraft() {
+  const value = (id) => document.getElementById(id)?.value || '';
+  const status = value('entry-status') || 'present';
+  const isPresent = status === 'present';
+  const date = value('entry-date') || getCurrentDate();
+
+  return {
+    status,
+    isPresent,
+    date,
+    remarks: value('entry-remarks'),
+    activities: value('entry-activities'),
+    amTimeIn: isPresent ? value('entry-am-in') : '',
+    amTimeOut: isPresent ? value('entry-am-out') : '',
+    pmTimeIn: isPresent ? value('entry-pm-in') : '',
+    pmTimeOut: isPresent ? value('entry-pm-out') : '',
+  };
+}
+
+// Mirrors server/tracker-core.js sanitizeEntry so the preview shows what the
+// server will store rather than a second opinion computed on the client.
+function deriveDraftFields(draft) {
+  const schedule = getScheduledWorkWindow(draft.date, store.state.settings);
+  const hoursRendered = draft.isPresent ? calculateEntryHours(draft) : 0;
+
+  return {
+    hoursRendered,
+    overtimeHours: draft.isPresent ? calculateOvertimeForDate(draft.date, hoursRendered) : 0,
+    lateMinutes: draft.isPresent && draft.amTimeIn ? calculateLate(draft.amTimeIn, schedule.expectedTimeIn) : 0,
+    undertimeMinutes: draft.isPresent && draft.pmTimeOut ? calculateUndertime(draft.pmTimeOut, schedule.expectedTimeOut) : 0,
+  };
+}
+
+function getDraftWarning(draft) {
+  if (!draft.date) return 'Date is required.';
+  if (!draft.isPresent) return '';
+  if (!draft.amTimeIn && !draft.pmTimeIn) return 'At least one time in is required.';
+
+  const amIn = parseTimeStrict(draft.amTimeIn);
+  const amOut = parseTimeStrict(draft.amTimeOut);
+  if (amIn != null && amOut != null && amIn >= amOut) return 'AM Out must be after AM In.';
+
+  const pmIn = parseTimeStrict(draft.pmTimeIn);
+  const pmOut = parseTimeStrict(draft.pmTimeOut);
+  if (pmIn != null && pmOut != null && pmIn >= pmOut) return 'PM Out must be after PM In.';
+
+  return '';
+}
+
+function renderDraftPreview() {
+  const preview = document.getElementById('entry-derived-preview');
+  if (!preview) return;
+
+  const draft = readEntryDraft();
+  const derived = deriveDraftFields(draft);
+  const warning = getDraftWarning(draft);
+
+  // textContent for the message: it is the only place a warning could carry
+  // user input into innerHTML.
+  preview.replaceChildren();
+  const cells = [
+    ['Hours', fmtHours(derived.hoursRendered)],
+    ['OT', formatOvertimeDuration(derived.overtimeHours) || '0 min'],
+    ['Late', fmtMinutes(derived.lateMinutes)],
+    ['Undertime', fmtMinutes(derived.undertimeMinutes)],
+  ];
+  cells.forEach(([label, value]) => {
+    const cell = document.createElement('div');
+    cell.innerHTML = `<span></span><strong></strong>`;
+    cell.querySelector('span').textContent = label;
+    cell.querySelector('strong').textContent = value;
+    preview.appendChild(cell);
+  });
+  if (warning) {
+    const note = document.createElement('p');
+    note.textContent = warning;
+    preview.appendChild(note);
+  }
 }
 
 function formatConflictFields(fields = []) {
@@ -144,6 +228,12 @@ function openEntryEditor(entry) {
   document.getElementById('entry-save').onclick = () => saveEntry(entry?.id || null);
   document.querySelector('.modal-close-btn').onclick = closeModal;
   document.querySelector('.modal-cancel-btn').onclick = closeModal;
+  DRAFT_FIELD_IDS.forEach(id => {
+    const field = document.getElementById(id);
+    field?.addEventListener('input', renderDraftPreview);
+    field?.addEventListener('change', renderDraftPreview);
+  });
+  renderDraftPreview();
 }
 
 function toggleSelectedDate(date, checked) {
@@ -212,53 +302,16 @@ function openTemplateManager() {
 }
 
 async function saveEntry(id = null) {
-  const status = document.getElementById('entry-status').value;
-  const date = document.getElementById('entry-date').value;
-  const amIn = document.getElementById('entry-am-in').value;
-  const amOut = document.getElementById('entry-am-out').value;
-  const pmIn = document.getElementById('entry-pm-in').value;
-  const pmOut = document.getElementById('entry-pm-out').value;
-  const remarks = document.getElementById('entry-remarks').value;
-  const activities = document.getElementById('entry-activities').value;
-  const settings = store.state.settings;
-  const isPresent = status === 'present';
+  const draft = readEntryDraft();
+  const warning = getDraftWarning(draft);
 
-  if (!date) {
-    toast('Date is required', 'error');
-    return;
-  }
-  if (isPresent && !amIn && !pmIn) {
-    toast('At least one time in is required', 'error');
-    return;
-  }
-  const amInMins = parseTimeStrict(amIn);
-  const amOutMins = parseTimeStrict(amOut);
-  const pmInMins = parseTimeStrict(pmIn);
-  const pmOutMins = parseTimeStrict(pmOut);
-  if (isPresent && amInMins != null && amOutMins != null && amInMins >= amOutMins) {
-    toast('AM Out must be after AM In', 'error');
-    return;
-  }
-  if (isPresent && pmInMins != null && pmOutMins != null && pmInMins >= pmOutMins) {
-    toast('PM Out must be after PM In', 'error');
+  if (warning) {
+    toast(warning.replace(/\.$/, ''), 'error');
     return;
   }
 
-  const entry = {
-    date,
-    status,
-    amTimeIn: isPresent ? amIn : '',
-    amTimeOut: isPresent ? amOut : '',
-    pmTimeIn: isPresent ? pmIn : '',
-    pmTimeOut: isPresent ? pmOut : '',
-    remarks,
-    activities,
-  };
-  const hoursRendered = isPresent ? calculateEntryHours(entry) : 0;
-  entry.hoursRendered = hoursRendered;
-  entry.overtimeHours = isPresent ? calculateOvertime(hoursRendered) : 0;
-  entry.lateMinutes = isPresent && amIn ? calculateLate(amIn, settings.expectedTimeIn) : 0;
-  entry.undertimeMinutes = isPresent && pmOut ? calculateUndertime(pmOut, settings.expectedTimeOut) : 0;
+  const entry = { ...draft, ...deriveDraftFields(draft) };
+  delete entry.isPresent;
 
   try {
     if (id) {
@@ -457,7 +510,7 @@ function renderTableSection() {
         <td class="font-mono">${fmtTimeStr(entry.amTimeIn)}</td><td class="font-mono">${fmtTimeStr(entry.amTimeOut)}</td>
         <td class="font-mono">${fmtTimeStr(entry.pmTimeIn)}</td><td class="font-mono">${fmtTimeStr(entry.pmTimeOut)}</td>
         <td class="font-mono">${store.getEntryStatus(entry) === 'present' && (entry.amTimeOut || entry.pmTimeOut) ? fmtHours(entry.hoursRendered) : '--'}</td>
-        <td class="font-mono">${store.getEntryStatus(entry) === 'present' && entry.overtimeHours > 0 ? fmtHours(entry.overtimeHours) : '--'}</td>
+        <td class="font-mono">${store.getEntryStatus(entry) === 'present' && entry.overtimeHours > 0 ? formatOvertimeDuration(entry.overtimeHours) : '--'}</td>
         <td class="font-mono">${store.getEntryStatus(entry) === 'present' && entry.lateMinutes > 0 ? fmtMinutes(entry.lateMinutes) : '--'}</td>
         <td><div class="table-actions">
           <button class="btn-icon btn-edit" data-id="${entry.id}" title="Edit">${ICONS.edit}</button>

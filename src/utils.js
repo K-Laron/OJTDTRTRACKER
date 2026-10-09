@@ -1,4 +1,5 @@
 import { store } from './store.js';
+import { getScheduleSegments, getScheduledWorkWindow } from '../shared/work-schedule.js';
 
 // --- Time Parsing & Formatting ---
 export function parseTime(t) {
@@ -29,10 +30,6 @@ export function calculateHours(timeIn, timeOut, breakMins = 0) {
   const i = parseTime(timeIn), o = parseTime(timeOut);
   if (i == null || o == null) return 0;
   return Math.max(0, (o - i - breakMins) / 60);
-}
-
-export function calculateOvertime(hours, threshold = 8) {
-  return Math.max(0, hours - threshold);
 }
 
 export function calculateLate(timeIn, expected) {
@@ -79,6 +76,47 @@ export function fmtDateLong(d) {
 
 export function getDayName(d) {
   return new Date(d + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short' });
+}
+
+export function getFullDayName(d) {
+  return new Date(d + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long' });
+}
+
+export function formatOvertimeDuration(hours, { blankZero = false } = {}) {
+  const totalMinutes = Math.round((Number(hours) || 0) * 60);
+  if (totalMinutes <= 0) return blankZero ? '' : '0 min';
+
+  const hrs = Math.floor(totalMinutes / 60);
+  const mins = totalMinutes % 60;
+  if (hrs === 0) return `${mins} min`;
+  if (mins === 0) return `${hrs} ${hrs === 1 ? 'hr' : 'hrs'}`;
+  return `${hrs} ${hrs === 1 ? 'hr' : 'hrs'} ${mins} min`;
+}
+
+// --- Schedule display ---
+export function formatScheduleWindow(schedule = {}) {
+  if (schedule.isSplit) {
+    const am = `${fmtTimeStr(schedule.amTimeIn)} - ${fmtTimeStr(schedule.amTimeOut)}`;
+    const pm = `${fmtTimeStr(schedule.pmTimeIn)} - ${fmtTimeStr(schedule.pmTimeOut)}`;
+    return `${am} / ${pm}`;
+  }
+  return `${fmtTimeStr(schedule.expectedTimeIn)} - ${fmtTimeStr(schedule.expectedTimeOut)}`;
+}
+
+function formatDateRangeLabel(startDate, endDate) {
+  const label = (value) => new Date(`${value}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  return startDate === endDate ? label(startDate) : `${label(startDate)}-${label(endDate)}`;
+}
+
+export function formatScheduleSummary(dateFrom, dateTo, settings = store.state.settings) {
+  const segments = getScheduleSegments(dateFrom, dateTo, settings, { workdaysOnly: true });
+  if (segments.length <= 1) {
+    return formatScheduleWindow(segments[0] || getScheduledWorkWindow(dateFrom, settings));
+  }
+
+  return segments
+    .map(segment => `${formatScheduleWindow(segment)} (${formatDateRangeLabel(segment.startDate, segment.endDate)})`)
+    .join('; ');
 }
 
 export const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];

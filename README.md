@@ -166,6 +166,11 @@ mongodb://127.0.0.1:27018/ojt_dtr_tracker?replicaSet=rs0
 - This project is tuned for a local desktop workflow, but data is stored per account through the built-in login system.
 - Generated folders such as `.runtime/`, `dist/`, `node_modules/`, and local Mongo data are not committed.
 - `server/.env` is intentionally local-only and not committed.
+- Entries stored before 2026-03-09 were derived against an 8-hour overtime
+  threshold and the old split schedule. After changing those rules, run
+  `node .\scripts\recalculate-dtr-derived-fields.mjs` to see which rows would
+  change, then add `--apply` to write the corrections with a JSON backup in
+  `output/backups/`.
 - `CORS_ORIGINS` in `server/.env` is a comma-separated allowlist of browser
   origins allowed to call the API. It defaults to the Vite dev server on 5173
   and `npm run preview` on 4173, on both localhost and 127.0.0.1. A request
