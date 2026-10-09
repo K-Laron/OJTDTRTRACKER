@@ -389,3 +389,53 @@ test('sanitizeEntry uses injected now for createdAt', () => {
   }, DEFAULT_SETTINGS, { now: '2026-04-01T00:00:00.000Z' });
   assert.equal(entry.createdAt, '2026-04-01T00:00:00.000Z');
 });
+
+test('calculateCompletionForecast returns three scenarios ordered conservative to optimistic', () => {
+  const longDay = (date, hours) => ({
+    date,
+    status: 'present',
+    amTimeIn: '08:00',
+    amTimeOut: '17:00',
+    hoursRendered: hours,
+  });
+  const forecast = calculateCompletionForecast({
+    today: '2026-04-06',
+    requiredHours: 120,
+    entries: [
+      longDay('2026-03-27', 12),
+      longDay('2026-03-30', 12),
+      longDay('2026-03-31', 12),
+      longDay('2026-04-01', 3),
+      longDay('2026-04-02', 3),
+      longDay('2026-04-03', 3),
+    ],
+  });
+
+  const { conservative, expected, optimistic } = forecast.scenarios;
+  assert.equal(forecast.lifetimeAvgPerDay, 7.5);
+  assert.equal(forecast.recentAvgPerDay, 6.6);
+  assert.ok(Math.abs(forecast.weightedAvgPerDay - 6.9) < 1e-9);
+  assert.equal(conservative.avgPerDay, 6.6);
+  assert.ok(Math.abs(expected.avgPerDay - 6.9) < 1e-9);
+  assert.equal(optimistic.avgPerDay, 7.5);
+  assert.ok(conservative.estimatedDate >= expected.estimatedDate);
+  assert.ok(expected.estimatedDate >= optimistic.estimatedDate);
+  assert.equal(forecast.estimatedDate, expected.estimatedDate);
+  assert.ok(forecast.suggestions.some(suggestion => suggestion.includes('slower than your full-history average')));
+});
+
+test('calculateCompletionForecast excludes holidays supplied by the caller', () => {
+  const forecast = calculateCompletionForecast({
+    today: '2026-04-06',
+    requiredHours: 40,
+    entries: [
+      { date: '2026-04-01', status: 'present', amTimeIn: '08:00', amTimeOut: '17:00', hoursRendered: 8 },
+      { date: '2026-04-02', status: 'present', amTimeIn: '08:00', amTimeOut: '17:00', hoursRendered: 8 },
+      { date: '2026-04-03', status: 'present', amTimeIn: '08:00', amTimeOut: '17:00', hoursRendered: 8 },
+    ],
+    holidays: [{ date: '2026-04-07', type: 'holiday' }],
+  });
+
+  assert.deepEqual(forecast.excludedDates, [{ date: '2026-04-07', status: 'holiday' }]);
+  assert.equal(forecast.estimatedDate, '2026-04-09');
+});
