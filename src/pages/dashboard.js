@@ -6,6 +6,32 @@ import { calculateOvertimeForDate, getScheduledWorkWindow } from '../../shared/w
 
 let clockIntervalId = null;
 
+const CONFIDENCE_LABEL = { high: 'High', medium: 'Medium', low: 'Low' };
+const MAX_FORECAST_NOTES = 2;
+
+function renderForecastEstimate(forecast) {
+  if (!forecast) {
+    return '<div class="detail-row"><span class="detail-label">Est. Completion</span>'
+      + '<span class="detail-value text-muted">Need at least one complete worked day</span></div>';
+  }
+
+  const { conservative, optimistic } = forecast.scenarios || {};
+  const dateRange = conservative && optimistic
+    && conservative.estimatedDate !== optimistic.estimatedDate
+    ? `${fmtDate(optimistic.estimatedDate)} to ${fmtDate(conservative.estimatedDate)}`
+    : fmtDate(forecast.estimatedDate);
+
+  return `
+       <div class="detail-row"><span class="detail-label">Expected Avg/Day</span><span class="detail-value">${forecast.avgPerDay.toFixed(1)}h</span></div>
+       <div class="detail-row"><span class="detail-label">Working Days Left</span><span class="detail-value">${forecast.workingDaysRemaining}</span></div>
+       <div class="detail-row"><span class="detail-label">Needed Avg/Day</span><span class="detail-value">${forecast.neededAvgHoursPerDay.toFixed(1)}h</span></div>
+       <div class="detail-row"><span class="detail-label">Est. Completion</span><span class="detail-value text-primary">${fmtDate(forecast.estimatedDate)}</span></div>
+       <div class="detail-row"><span class="detail-label">Best to Worst Case</span><span class="detail-value">${dateRange}</span></div>
+       <div class="detail-row"><span class="detail-label">Confidence</span><span class="detail-value">${CONFIDENCE_LABEL[forecast.confidence] || 'Medium'}</span></div>
+       <div class="detail-row"><span class="detail-label">Forecast Note</span><span class="detail-value">${forecast.excludedDates.length ? `${forecast.excludedDates.length} non-working day(s) excluded` : 'No excluded future workdays'}</span></div>
+       ${(forecast.confidenceReasons || []).slice(0, MAX_FORECAST_NOTES).map(reason => `<div class="detail-row"><span class="detail-label">Why</span><span class="detail-value">${reason}</span></div>`).join('')}`;
+}
+
 export function render() {
   const progress = store.getProgress();
   const totalHrs = store.getTotalHours();
@@ -37,13 +63,7 @@ export function render() {
 
   // Completion estimate
   const forecast = store.getCompletionForecast();
-  const estHtml = forecast
-    ? `<div class="detail-row"><span class="detail-label">Avg Hours/Day</span><span class="detail-value">${forecast.avgPerDay.toFixed(1)}h</span></div>
-       <div class="detail-row"><span class="detail-label">Working Days Left</span><span class="detail-value">${forecast.workingDaysRemaining}</span></div>
-       <div class="detail-row"><span class="detail-label">Needed Avg/Day</span><span class="detail-value">${forecast.neededAvgHoursPerDay.toFixed(1)}h</span></div>
-       <div class="detail-row"><span class="detail-label">Est. Completion</span><span class="detail-value text-primary">${fmtDate(forecast.estimatedDate)}</span></div>
-       <div class="detail-row"><span class="detail-label">Forecast Note</span><span class="detail-value">${forecast.excludedDates.length ? `${forecast.excludedDates.length} non-working day(s) excluded` : 'No excluded future workdays'}</span></div>`
-    : `<div class="detail-row"><span class="detail-label">Est. Completion</span><span class="detail-value text-muted">Need present-day data</span></div>`;
+  const estHtml = renderForecastEstimate(forecast);
 
   // Weekly progress
   const weekHrs = store.getCurrentWeekHours();
