@@ -1,5 +1,5 @@
 import { getScheduledNonWorkingStatus, isScheduledWorkday } from '../shared/work-schedule.js';
-import { countWorkingDays } from '../shared/forecast.js';
+import { buildCompletionForecast } from '../shared/forecast.js';
 import { request as apiRequest } from './api/client.js';
 
 const DEFAULT_STATE = {
@@ -1037,57 +1037,15 @@ class Store {
   }
 
   _computeCompletionForecast(today) {
-    const presentEntries = this.state.entries
-      .map(entry => ({ ...entry, status: normalizeEntryStatus(entry) }))
-      .filter(entry => entry.status === 'present' && (parseFloat(entry.hoursRendered) || 0) > 0);
-
-    if (!presentEntries.length) return null;
-
-    const totalHours = presentEntries.reduce((sum, entry) => sum + (parseFloat(entry.hoursRendered) || 0), 0);
-    const avgPerDay = totalHours / presentEntries.length;
-    if (avgPerDay <= 0) return null;
-
-    const remainingHours = Math.max(0, this.getRequiredHours() - totalHours);
-    if (remainingHours === 0) {
-      return {
-        avgPerDay,
-        remainingHours,
-        workingDaysRemaining: 0,
-        neededAvgHoursPerDay: 0,
-        estimatedDate: today,
-        excludedDates: [],
-      };
-    }
-
-    const statusByDate = new Map();
-    this.state.entries.forEach(entry => {
-      statusByDate.set(entry.date, normalizeEntryStatus(entry));
-    });
-    this.state.holidays.forEach(holiday => {
-      if (statusByDate.has(holiday.date)) return;
-      statusByDate.set(
-        holiday.date,
-        holiday.type === 'holiday' ? 'holiday' : holiday.type === 'vacation_leave' ? 'vacation' : 'leave'
-      );
-    });
-
-    const workingDaysRemaining = Math.ceil(remainingHours / avgPerDay);
-    const { estimatedDate, excludedDates } = countWorkingDays({
-      startDate: today,
-      daysNeeded: workingDaysRemaining,
-      statusByDate,
+    return buildCompletionForecast({
+      today,
+      requiredHours: this.getRequiredHours(),
+      entries: this.state.entries,
+      holidays: this.state.holidays,
+      resolveStatus: normalizeEntryStatus,
       isWorkday: isWeekday,
-      isExcluded: (status) => NON_WORKING_STATUSES.has(status) && status !== 'absent',
+      isExcluded: status => NON_WORKING_STATUSES.has(status) && status !== 'absent',
     });
-
-    return {
-      avgPerDay,
-      remainingHours,
-      workingDaysRemaining,
-      neededAvgHoursPerDay: remainingHours / workingDaysRemaining,
-      estimatedDate,
-      excludedDates,
-    };
   }
 
   getCurrentWeekHours() {

@@ -1,5 +1,5 @@
 import { isScheduledWorkday } from '../shared/work-schedule.js';
-import { countWorkingDays } from '../shared/forecast.js';
+import { buildCompletionForecast } from '../shared/forecast.js';
 import {
   calculateHours as sharedCalculateHours,
   parseTimeStrict,
@@ -330,55 +330,19 @@ function sanitizeEntryWithEffectiveSettings(input = {}, effectiveSettings, { exi
   };
 }
 
-export function calculateCompletionForecast({ today, requiredHours, entries = [] } = {}) {
-  const normalizedToday = assertDate(today || toLocalDateString(new Date()), 'Forecast date');
-  const presentEntries = entries
-    .map(entry => ({
-      ...entry,
-      status: normalizeStatus(entry?.status, (entry?.amTimeIn || entry?.pmTimeIn || entry?.hoursRendered) ? 'present' : 'absent'),
-      hoursRendered: Number(entry?.hoursRendered) || 0,
-    }))
-    .filter(entry => entry.status === 'present' && entry.hoursRendered > 0);
-
-  if (!presentEntries.length) return null;
-
-  const totalHours = presentEntries.reduce((sum, entry) => sum + entry.hoursRendered, 0);
-  const avgPerDay = totalHours / presentEntries.length;
-  if (avgPerDay <= 0) return null;
-
-  const remainingHours = Math.max(0, Number(requiredHours || 0) - totalHours);
-  if (remainingHours === 0) {
-    return {
-      avgPerDay,
-      remainingHours,
-      workingDaysRemaining: 0,
-      neededAvgHoursPerDay: 0,
-      estimatedDate: normalizedToday,
-      excludedDates: [],
-    };
-  }
-
-  const statusesByDate = new Map(entries.map(entry => [
-    entry.date,
-    normalizeStatus(entry?.status, (entry?.amTimeIn || entry?.pmTimeIn || entry?.hoursRendered) ? 'present' : 'absent'),
-  ]));
-  const workingDaysRemaining = Math.ceil(remainingHours / avgPerDay);
-  const { estimatedDate, excludedDates } = countWorkingDays({
-    startDate: normalizedToday,
-    daysNeeded: workingDaysRemaining,
-    statusByDate: statusesByDate,
+export function calculateCompletionForecast({ today, requiredHours, entries = [], holidays = [] } = {}) {
+  return buildCompletionForecast({
+    today: assertDate(today || toLocalDateString(new Date()), 'Forecast date'),
+    requiredHours,
+    entries,
+    holidays,
+    resolveStatus: entry => normalizeStatus(
+      entry?.status,
+      (entry?.amTimeIn || entry?.pmTimeIn || entry?.hoursRendered) ? 'present' : 'absent',
+    ),
     isWorkday: isScheduledWorkday,
-    isExcluded: (status) => isExcludedWorkdayStatus(status || ''),
+    isExcluded: status => isExcludedWorkdayStatus(status || ''),
   });
-
-  return {
-    avgPerDay,
-    remainingHours,
-    workingDaysRemaining,
-    neededAvgHoursPerDay: remainingHours / workingDaysRemaining,
-    estimatedDate,
-    excludedDates,
-  };
 }
 
 export function sanitizeImportPayload(payload = {}) {
