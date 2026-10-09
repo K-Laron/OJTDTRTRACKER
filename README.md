@@ -9,6 +9,7 @@ OJT DTR Tracker is a local desktop daily time record system for OJT hour trackin
 - Recalculates rendered hours, overtime, late minutes, and undertime on the server
 - Generates DTR views plus PDF and Excel exports with detailed filenames that include profile name, account username, covered period, and export date
 - Supports login/registration, config updates, notification reminders, and auto-backup JSON downloads
+- Requires a server-issued session token on every authenticated API call; a stored `userId` alone is not a session
 - Supports holiday records, public-holiday sync, JSON export/import preview, activity templates, and batch status updates
 - Supports activity history with restore actions for entries, holidays, config, and imports
 - Pushes live updates to the frontend through `/api/sync`
@@ -165,6 +166,10 @@ mongodb://127.0.0.1:27018/ojt_dtr_tracker?replicaSet=rs0
 - This project is tuned for a local desktop workflow, but data is stored per account through the built-in login system.
 - Generated folders such as `.runtime/`, `dist/`, `node_modules/`, and local Mongo data are not committed.
 - `server/.env` is intentionally local-only and not committed.
+- `CORS_ORIGINS` in `server/.env` is a comma-separated allowlist of browser
+  origins allowed to call the API. It defaults to
+  `http://localhost:5173,http://127.0.0.1:5173`. A request from any other
+  origin is rejected with 403.
 
 ## License
 
