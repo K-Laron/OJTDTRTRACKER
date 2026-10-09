@@ -52,9 +52,63 @@ test('sanitizeEntry merges partial updates with the existing entry', () => {
   }, DEFAULT_SETTINGS, { existingEntry: existing });
 
   assert.equal(updated.hoursRendered, 9);
-  assert.equal(updated.overtimeHours, 1);
+  // 2026-03-21 is inside the four-day week, so the daily threshold is 10h.
+  assert.equal(updated.overtimeHours, 0);
   assert.equal(updated.pmTimeIn, '13:00');
   assert.equal(updated.pmTimeOut, '18:00');
+});
+
+test('sanitizeEntry applies the pre-four-day-week overtime threshold before 2026-03-09', () => {
+  const before = sanitizeEntry({
+    id: 'entry-3a',
+    date: '2026-03-06',
+    status: 'present',
+    amTimeIn: '07:30',
+    amTimeOut: '11:30',
+    pmTimeIn: '13:00',
+    pmTimeOut: '17:00',
+  }, DEFAULT_SETTINGS);
+
+  assert.equal(before.hoursRendered, 8);
+  assert.equal(before.overtimeHours, 0);
+
+  const after = sanitizeEntry({
+    id: 'entry-3b',
+    date: '2026-03-09',
+    status: 'present',
+    amTimeIn: '07:30',
+    amTimeOut: '11:30',
+    pmTimeIn: '13:00',
+    pmTimeOut: '17:30',
+  }, DEFAULT_SETTINGS);
+
+  assert.equal(after.hoursRendered, 8.5);
+  assert.equal(after.overtimeHours, 0);
+});
+
+test('sanitizeEntry measures late and undertime against the historical split schedule', () => {
+  const split = sanitizeEntry({
+    id: 'entry-4',
+    date: '2026-02-10',
+    status: 'present',
+    amTimeIn: '08:00',
+    pmTimeOut: '16:00',
+  }, DEFAULT_SETTINGS);
+
+  // The split expected 07:30 in, not the profile's 08:00.
+  assert.equal(split.lateMinutes, 30);
+  assert.equal(split.undertimeMinutes, 60);
+
+  const onProfile = sanitizeEntry({
+    id: 'entry-5',
+    date: '2026-04-10',
+    status: 'present',
+    amTimeIn: '08:00',
+    pmTimeOut: '16:00',
+  }, DEFAULT_SETTINGS);
+
+  assert.equal(onProfile.lateMinutes, 0);
+  assert.equal(onProfile.undertimeMinutes, 60);
 });
 
 test('sanitizeImportPayload rejects duplicate ids and duplicate holiday dates', () => {

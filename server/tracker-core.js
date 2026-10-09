@@ -1,4 +1,8 @@
-import { isScheduledWorkday } from '../shared/work-schedule.js';
+import {
+  calculateOvertimeForDate,
+  getScheduledWorkWindow,
+  isScheduledWorkday,
+} from '../shared/work-schedule.js';
 import { buildCompletionForecast } from '../shared/forecast.js';
 import {
   calculateHours as sharedCalculateHours,
@@ -49,10 +53,6 @@ export function calculateEntryHours(entry) {
   if (entry.amTimeIn && entry.amTimeOut) total += calculateHours(entry.amTimeIn, entry.amTimeOut);
   if (entry.pmTimeIn && entry.pmTimeOut) total += calculateHours(entry.pmTimeIn, entry.pmTimeOut);
   return total;
-}
-
-export function calculateOvertime(hours, threshold = 8) {
-  return Math.max(0, hours - threshold);
 }
 
 export function calculateLate(timeIn, expected) {
@@ -318,15 +318,15 @@ function sanitizeEntryWithEffectiveSettings(input = {}, effectiveSettings, { exi
     createdAt: merged.createdAt || now || new Date().toISOString(),
   };
 
-  const effective = effectiveSettings || DEFAULT_SETTINGS;
+  const schedule = getScheduledWorkWindow(date, effectiveSettings || DEFAULT_SETTINGS);
   const hoursRendered = isPresentStatus(status) ? calculateEntryHours(entry) : 0;
 
   return {
     ...entry,
     hoursRendered,
-    overtimeHours: isPresentStatus(status) ? calculateOvertime(hoursRendered) : 0,
-    lateMinutes: isPresentStatus(status) && amTimeIn ? calculateLate(amTimeIn, effective.expectedTimeIn) : 0,
-    undertimeMinutes: isPresentStatus(status) && pmTimeOut ? calculateUndertime(pmTimeOut, effective.expectedTimeOut) : 0,
+    overtimeHours: isPresentStatus(status) ? calculateOvertimeForDate(date, hoursRendered) : 0,
+    lateMinutes: isPresentStatus(status) && amTimeIn ? calculateLate(amTimeIn, schedule.expectedTimeIn) : 0,
+    undertimeMinutes: isPresentStatus(status) && pmTimeOut ? calculateUndertime(pmTimeOut, schedule.expectedTimeOut) : 0,
   };
 }
 
