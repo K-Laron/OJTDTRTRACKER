@@ -1,6 +1,7 @@
 import { getScheduledNonWorkingStatus, isScheduledWorkday } from '../shared/work-schedule.js';
 import { buildCompletionForecast } from '../shared/forecast.js';
 import { request as apiRequest } from './api/client.js';
+import { collapseEntriesByDate, upsertEntryForDate } from './lib/entries.js';
 
 const DEFAULT_STATE = {
   profile: {
@@ -299,7 +300,7 @@ class Store {
     const changedResources = [];
 
     if (resources.includes('entries')) {
-      this.state.entries = entries;
+      this.state.entries = collapseEntriesByDate(entries);
       changedResources.push('entries');
     }
 
@@ -484,7 +485,7 @@ class Store {
       throw err;
     });
     
-    this.state.entries.push(newEntry);
+    this.state.entries = upsertEntryForDate(this.state.entries, newEntry);
     this._markResourcesChanged(['entries']);
     this._notify({ resources: ['entries'] });
     return newEntry;
@@ -540,8 +541,9 @@ class Store {
       if (err.status === 409 && err.data?.current) {
         this._consumeLocalSyncSkip();
         const index = this.state.entries.findIndex(e => e.id === id);
-        if (index === -1) this.state.entries.push(err.data.current);
-        else this.state.entries[index] = err.data.current;
+        this.state.entries = index === -1
+          ? upsertEntryForDate(this.state.entries, err.data.current)
+          : this.state.entries.map((e, i) => (i === index ? err.data.current : e));
         this._markResourcesChanged(['entries']);
         this._notify({ resources: ['entries'] });
         const conflictError = new Error('Entry changed elsewhere. Latest data was loaded.');
@@ -1299,11 +1301,9 @@ class Store {
       throw err;
     });
 
-    if (existingIndex === -1) {
-      this.state.entries.push(restored);
-    } else {
-      this.state.entries[existingIndex] = restored;
-    }
+    this.state.entries = existingIndex === -1
+      ? upsertEntryForDate(this.state.entries, restored)
+      : this.state.entries.map((item, i) => (i === existingIndex ? restored : item));
     this._markResourcesChanged(['entries']);
     this._notify({ resources: ['entries'] });
     return restored;
