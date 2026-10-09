@@ -51,7 +51,7 @@ if (-not (Test-PortListening -Port 5000)) {
 
 if (-not (Test-PortListening -Port 5173)) {
   $frontend = Start-Process -FilePath "cmd.exe" `
-    -ArgumentList "/c", "npm run dev 1>> `"$viteLog`" 2>>&1" `
+    -ArgumentList "/c", "npm run dev -- --strictPort 1>> `"$viteLog`" 2>>&1" `
     -WorkingDirectory $root `
     -WindowStyle Hidden `
     -PassThru

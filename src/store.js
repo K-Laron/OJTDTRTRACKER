@@ -119,10 +119,23 @@ class Store {
     this.syncedHolidayYears = new Set();
     this.userId = localStorage.getItem('dtr_user_id') || null;
     this.username = localStorage.getItem('dtr_username') || null;
-    if (this.userId) {
+    this.authToken = localStorage.getItem('dtr_auth_token') || null;
+    if (this.userId && this.authToken) {
       this.init();
       this.startPolling();
+    } else if (this.userId) {
+      // The server now requires a session token, so a stored userId alone is
+      // no longer a usable session. Drop it instead of retrying into a 401.
+      this.logout();
     }
+  }
+
+  getAuthHeaders(extra = {}) {
+    return {
+      ...extra,
+      'X-User-Id': this.userId,
+      'X-Auth-Token': this.authToken,
+    };
   }
 
   async _fetchAllEntries(headers, isCurrent) {
@@ -173,14 +186,14 @@ class Store {
   }
 
   async init() {
-    if (!this.userId) return;
+    if (!this.userId || !this.authToken) return;
     const sequence = ++this.initSequence;
     const dataVersionAtStart = this.dataVersion;
     let applied = false;
     this.isHydrating = true;
     this._notify({ resources: ['hydration'], forceRender: true });
     try {
-      const headers = { 'X-User-Id': this.userId };
+      const headers = this.getAuthHeaders();
       const isCurrent = () => sequence === this.initSequence && !!this.userId;
       const [entries, holidays, config] = await Promise.all([
         this._fetchAllEntries(headers, isCurrent),
@@ -318,9 +331,9 @@ class Store {
   }
 
   async _refreshResources(resources = ['entries', 'holidays', 'config']) {
-    if (!this.userId) return;
+    if (!this.userId || !this.authToken) return;
     const resourceSet = new Set(resources);
-    const headers = { 'X-User-Id': this.userId };
+    const headers = this.getAuthHeaders();
     const requests = [];
 
     if (resourceSet.has('entries')) {
@@ -336,7 +349,7 @@ class Store {
     if (!requests.length) return;
 
     const results = await Promise.all(requests);
-    if (!this.userId) return;
+    if (!this.userId || !this.authToken) return;
 
     let entries = this.state.entries;
     let holidays = this.state.holidays;
@@ -356,7 +369,7 @@ class Store {
   }
 
   _scheduleServerRefresh(resources = ['entries', 'holidays', 'config']) {
-    if (!this.userId) return;
+    if (!this.userId || !this.authToken) return;
     const nextResources = new Set(resources);
     if (this.syncInFlight) {
       for (const resource of nextResources) this.syncQueued.add(resource);
@@ -385,8 +398,9 @@ class Store {
   }
 
   startPolling() {
-    if (!this.userId || this.evtSource) return;
-    this.evtSource = new EventSource(`${API_BASE}/sync?userId=${this.userId}`);
+    if (!this.userId || !this.authToken || this.evtSource) return;
+    const syncQuery = new URLSearchParams({ userId: this.userId, authToken: this.authToken });
+    this.evtSource = new EventSource(`${API_BASE}/sync?${syncQuery}`);
     this.evtSource.onmessage = async (e) => {
       const data = JSON.parse(e.data);
       if (data.type === 'update') {
@@ -413,7 +427,7 @@ class Store {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
     });
-    this._setAuth(data.userId, data.username);
+    this._setAuth(data.userId, data.username, data.authToken);
   }
 
   async register(username, password) {
@@ -421,14 +435,16 @@ class Store {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
     });
-    this._setAuth(data.userId, data.username);
+    this._setAuth(data.userId, data.username, data.authToken);
   }
 
-  _setAuth(id, name) {
+  _setAuth(id, name, authToken) {
     this.userId = id;
     this.username = name;
+    this.authToken = authToken;
     localStorage.setItem('dtr_user_id', id);
     localStorage.setItem('dtr_username', name);
+    localStorage.setItem('dtr_auth_token', authToken);
     this._markResourcesChanged(['auth']);
     this.init();
     this.startPolling();
@@ -440,8 +456,10 @@ class Store {
   logout() {
     this.userId = null;
     this.username = null;
+    this.authToken = null;
     localStorage.removeItem('dtr_user_id');
     localStorage.removeItem('dtr_username');
+    localStorage.removeItem('dtr_auth_token');
     if (this.evtSource) { this.evtSource.close(); this.evtSource = null; }
     this.state = structuredClone(DEFAULT_STATE);
     this.syncedHolidayYears = new Set();
@@ -459,7 +477,7 @@ class Store {
     this._queueLocalSyncSkip();
     const newEntry = await this._request('/entries', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(entry)
     }, { logoutOn401: true }).catch(err => {
       this._consumeLocalSyncSkip();
@@ -482,7 +500,7 @@ class Store {
     try {
       updatedEntry = await this._request(`/entries/${id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+        headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ ...updates, previousState: previousEntry })
       }, { logoutOn401: true });
     } catch (err) {
@@ -515,7 +533,7 @@ class Store {
     try {
       await this._request(`/entries/${id}`, {
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+        headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ previousState: entry || null, force })
       }, { logoutOn401: true });
     } catch (err) {
@@ -704,7 +722,7 @@ class Store {
     if (limit != null) params.set('limit', String(limit));
     const query = params.toString();
     return this._request(`/entries${query ? `?${query}` : ''}`, {
-      headers: { 'X-User-Id': this.userId }
+      headers: this.getAuthHeaders()
     }, { logoutOn401: true });
   }
 
@@ -735,7 +753,7 @@ class Store {
     this._queueLocalSyncSkip();
     const savedConfig = await this._request('/config', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ 
         profile: this.state.profile, 
         settings: this.state.settings, 
@@ -770,7 +788,7 @@ class Store {
     if (normalizedYears.length) params.set('years', normalizedYears.join(','));
 
     return this._request(`/holidays${params.toString() ? `?${params}` : ''}`, {
-      headers: { 'X-User-Id': this.userId }
+      headers: this.getAuthHeaders()
     }, { logoutOn401: true });
   }
 
@@ -804,7 +822,7 @@ class Store {
       this._queueLocalSyncSkip();
       const newHol = await this._request('/holidays', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+        headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(h)
       }, { logoutOn401: true }).catch(err => {
         this._consumeLocalSyncSkip();
@@ -818,7 +836,7 @@ class Store {
 
   async removeHoliday(date) { 
     this._queueLocalSyncSkip();
-    await this._request(`/holidays/${date}`, { method: 'DELETE', headers: { 'X-User-Id': this.userId } }, { logoutOn401: true }).catch(err => {
+    await this._request(`/holidays/${date}`, { method: 'DELETE', headers: this.getAuthHeaders() }, { logoutOn401: true }).catch(err => {
       this._consumeLocalSyncSkip();
       throw err;
     });
@@ -832,7 +850,7 @@ class Store {
     this._queueLocalSyncSkip();
     const restored = await this._request(`/holidays/${snapshot.date}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(snapshot)
     }, { logoutOn401: true }).catch(err => {
       this._consumeLocalSyncSkip();
@@ -852,7 +870,7 @@ class Store {
     this._queueLocalSyncSkip();
     await this._request('/config', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(snapshot)
     }, { logoutOn401: true }).catch(err => {
       this._consumeLocalSyncSkip();
@@ -1234,7 +1252,7 @@ class Store {
     const data = JSON.parse(json);
     return this._request('/import/preview', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(data)
     }, { logoutOn401: true });
   }
@@ -1245,7 +1263,7 @@ class Store {
       this._queueLocalSyncSkip();
       await this._request('/import', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+        headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(data)
       }, { logoutOn401: true }).catch(err => {
         this._consumeLocalSyncSkip();
@@ -1274,7 +1292,7 @@ class Store {
     this._queueLocalSyncSkip();
     const restored = await this._request(path, {
       method,
-      headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(body)
     }, { logoutOn401: true }).catch(err => {
       this._consumeLocalSyncSkip();
@@ -1296,7 +1314,7 @@ class Store {
     this._queueLocalSyncSkip();
     await this._request('/import', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(snapshot)
     }, { logoutOn401: true }).catch(err => {
       this._consumeLocalSyncSkip();
@@ -1314,7 +1332,7 @@ class Store {
       this._queueLocalSyncSkip();
       await this._request('/import', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-User-Id': this.userId },
+        headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(DEFAULT_STATE)
       }, { logoutOn401: true }).catch(err => {
         this._consumeLocalSyncSkip();

@@ -337,8 +337,8 @@ async function loadAuditEvents() {
   auditError = '';
   try {
     const data = await apiRequest('/audit?limit=50', {
-      headers: { 'X-User-Id': store.userId }
-    });
+      headers: store.getAuthHeaders(),
+    }, { on401: () => store.logout() });
     if (!Array.isArray(data)) throw new Error('Failed to load activity');
     auditEvents = data;
   } catch (err) {

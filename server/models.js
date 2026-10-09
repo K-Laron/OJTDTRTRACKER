@@ -5,6 +5,10 @@ const userSchema = new mongoose.Schema({
   // Stored as scrypt hash for new accounts; legacy plain-text rows are
   // upgraded on next successful login (see services/auth.service.js).
   password: { type: String, required: true },
+  // Sessions carry a bearer token; only its sha256 is stored so a database
+  // read cannot replay a live session.
+  authTokenHash: { type: String, default: '' },
+  authTokenCreatedAt: Date,
   createdAt: { type: Date, default: Date.now }
 });
 
