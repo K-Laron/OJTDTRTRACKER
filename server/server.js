@@ -17,7 +17,9 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/ojt_dtr_tracker';
 const allowedOrigins = new Set(
-  String(process.env.CORS_ORIGINS || 'http://localhost:5173,http://127.0.0.1:5173')
+  // 5173 is the dev server, 4173 is `npm run preview`. Anything else the
+  // frontend is served from has to be listed in CORS_ORIGINS.
+  String(process.env.CORS_ORIGINS || 'http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173')
     .split(',')
     .map(origin => origin.trim())
     .filter(Boolean),

@@ -167,9 +167,10 @@ mongodb://127.0.0.1:27018/ojt_dtr_tracker?replicaSet=rs0
 - Generated folders such as `.runtime/`, `dist/`, `node_modules/`, and local Mongo data are not committed.
 - `server/.env` is intentionally local-only and not committed.
 - `CORS_ORIGINS` in `server/.env` is a comma-separated allowlist of browser
-  origins allowed to call the API. It defaults to
-  `http://localhost:5173,http://127.0.0.1:5173`. A request from any other
-  origin is rejected with 403.
+  origins allowed to call the API. It defaults to the Vite dev server on 5173
+  and `npm run preview` on 4173, on both localhost and 127.0.0.1. A request
+  from any other origin is rejected with 403. If you serve the frontend from a
+  different port, add that origin here.
 
 ## License
 
