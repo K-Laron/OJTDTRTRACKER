@@ -4,11 +4,7 @@ import { store } from './store.js';
 import { ICONS, getCurrentDate, requestRender, toast } from './utils.js';
 import { buildJsonExportFilename } from './lib/export-filenames.js';
 
-import * as dashboard from './pages/dashboard.js';
-import * as timelog from './pages/timelog.js';
-import * as settings from './pages/settings.js';
-import * as calendar from './pages/calendar.js';
-import * as login from './pages/login.js';
+// Page modules are code-split and loaded on demand
 
 const app = document.getElementById('app');
 
@@ -26,10 +22,10 @@ const navItems = [
 ];
 
 const routeLoaders = {
-  '/': async () => dashboard,
-  '/timelog': async () => timelog,
-  '/calendar': async () => calendar,
-  '/settings': async () => settings,
+  '/': () => import('./pages/dashboard.js'),
+  '/timelog': () => import('./pages/timelog.js'),
+  '/calendar': () => import('./pages/calendar.js'),
+  '/settings': () => import('./pages/settings.js'),
   '/dtr': () => import('./pages/dtr.js'),
   '/reports': () => import('./pages/reports.js'),
 };
@@ -205,6 +201,8 @@ async function renderPage(path) {
   const token = ++renderToken;
 
   if (!store.userId) {
+    const login = await import('./pages/login.js');
+    if (token !== renderToken) return;
     app.innerHTML = `<div style="display:flex; justify-content:center; align-items:center; min-height:100vh;">${login.render()}</div>`;
     if (login.mount) login.mount();
     shellBound = false;

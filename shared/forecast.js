@@ -30,7 +30,7 @@ function countWorkingDays({ startDate, daysNeeded, statusByDate = new Map(), isW
     scannedDays += 1;
     cursor.setDate(cursor.getDate() + 1);
     const dateKey = toLocalDateString(cursor);
-    if (!isWorkday(dateKey)) {
+    if (!isWorkday(dateKey, cursor)) {
       continue;
     }
     const status = statusByDate.get(dateKey);

@@ -78,10 +78,12 @@ export async function updateEntry(userId, id, body = {}) {
   const { result } = await withOptionalTransaction(async (session) => {
     const currentQuery = Entry.findOne({ id, userId });
     if (session) currentQuery.session(session);
-    const current = await currentQuery;
-    if (!current) return { status: 404, body: { error: 'Entry not found' } };
 
-    const settings = await getUserSettings(userId, session);
+    const [current, settings] = await Promise.all([
+      currentQuery,
+      getUserSettings(userId, session),
+    ]);
+    if (!current) return { status: 404, body: { error: 'Entry not found' } };
     const resolution = resolveEntryUpdate(current.toObject(), previousState, updates, settings);
     if (resolution.type === 'conflict') {
       return {

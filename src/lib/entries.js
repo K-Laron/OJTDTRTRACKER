@@ -15,12 +15,26 @@ function entrySortTime(entry = {}) {
 // timestamp fall back to array order, so the last one read wins.
 export function collapseEntriesByDate(entries = []) {
   const byDate = new Map();
-  entries.forEach(entry => {
-    if (!entry?.date) return;
-    const current = byDate.get(entry.date);
-    if (!current || entrySortTime(entry) >= entrySortTime(current)) byDate.set(entry.date, entry);
-  });
-  return [...byDate.values()];
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    const date = entry?.date;
+    if (!date) continue;
+    const current = byDate.get(date);
+    if (!current) {
+      byDate.set(date, [entry, entrySortTime(entry)]);
+    } else {
+      const sortTime = entrySortTime(entry);
+      if (sortTime >= current[1]) {
+        current[0] = entry;
+        current[1] = sortTime;
+      }
+    }
+  }
+  const result = [];
+  for (const pair of byDate.values()) {
+    result.push(pair[0]);
+  }
+  return result;
 }
 
 // Replaces every entry on the same date, so adding a record for a date that
