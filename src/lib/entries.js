@@ -43,3 +43,27 @@ export function upsertEntryForDate(entries = [], entry) {
   const kept = entries.filter(item => item?.date !== entry?.date);
   return entry ? [...kept, entry] : kept;
 }
+import { getScheduledNonWorkingStatus } from '../../shared/work-schedule.js';
+
+export const ENTRY_STATUSES = new Set(['present', 'leave', 'vacation', 'holiday', 'no_ojt', 'absent']);
+export const NON_WORKING_STATUSES = new Set(['leave', 'vacation', 'holiday', 'no_ojt', 'absent']);
+
+export function normalizeEntryStatus(entry = {}) {
+  const normalized = String(entry.status || '').trim().toLowerCase();
+  const scheduledNonWorkingStatus = getScheduledNonWorkingStatus(entry.date || '');
+  if (ENTRY_STATUSES.has(normalized)) {
+    if (normalized === 'absent' && scheduledNonWorkingStatus) return scheduledNonWorkingStatus;
+    return normalized;
+  }
+  if (entry.amTimeIn || entry.amTimeOut || entry.pmTimeIn || entry.pmTimeOut || Number(entry.hoursRendered) > 0) {
+    return 'present';
+  }
+  if (scheduledNonWorkingStatus) return scheduledNonWorkingStatus;
+  return 'absent';
+}
+
+export function formatStatusLabel(status) {
+  return String(status || 'absent')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, char => char.toUpperCase());
+}
