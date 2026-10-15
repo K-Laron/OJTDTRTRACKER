@@ -1,7 +1,52 @@
+import { signOffMonth, retractMonthSignOff, getMonthSignOff } from './lib/store-signoff.js';
 import { getScheduledNonWorkingStatus, isScheduledWorkday } from '../shared/work-schedule.js';
-import { buildCompletionForecast } from '../shared/forecast.js';
+import { toLocalDateString } from '../shared/time.js';
 import { request as apiRequest } from './api/client.js';
-import { collapseEntriesByDate, upsertEntryForDate } from './lib/entries.js';
+import {
+  ENTRY_STATUSES,
+  NON_WORKING_STATUSES,
+  collapseEntriesByDate,
+  formatStatusLabel,
+  normalizeEntryStatus,
+  upsertEntryForDate,
+} from './lib/entries.js';
+import {
+  getActivityTemplates,
+  saveActivityTemplate,
+  deleteActivityTemplate,
+} from './lib/activity-templates.js';
+import {
+  computeAttendanceSummary,
+  computeCurrentWeekHours,
+  computeDataQualityAlerts,
+  computeStatusSummary,
+  computeSummaryPack,
+  computeSummaryStats,
+  computeCompletionEstimate,
+  computeCompletionForecast,
+  computeTrendData,
+  resolveEntryOrStatusByDate,
+} from './lib/store-analytics.js';
+import {
+  applyTemplateToDates,
+  batchUpdateStatuses,
+  findPreviousWorkingEntry,
+  reusePreviousWorkingDay,
+} from './lib/store-batch.js';
+import {
+  clearAllData,
+  exportData,
+  importData,
+  previewImport,
+  restoreConfig,
+  restoreEntry,
+  restoreHoliday,
+  restoreStateSnapshot,
+} from './lib/store-data-transfer.js';
+import {
+  fetchAllEntries,
+  refreshResources,
+} from './lib/store-sync.js';
 
 const DEFAULT_STATE = {
   profile: {
@@ -24,25 +69,11 @@ const DEFAULT_STATE = {
   entries: [],
   holidays: [],
   theme: 'dark',
+  signOffs: {},
 };
 
 const API_BASE = '/api';
 const INIT_PAGE_LIMIT = 500;
-const ENTRY_STATUSES = new Set(['present', 'leave', 'vacation', 'holiday', 'no_ojt', 'absent']);
-const NON_WORKING_STATUSES = new Set(['leave', 'vacation', 'holiday', 'no_ojt', 'absent']);
-const DEFAULT_ACTIVITY_TEMPLATES = [
-  { id: 'template-documentation', name: 'Documentation', activities: 'Updated documentation and organized work output.', remarks: '' },
-  { id: 'template-testing', name: 'Testing', activities: 'Tested implemented features and validated expected behavior.', remarks: '' },
-  { id: 'template-development', name: 'Development', activities: 'Implemented assigned tasks and reviewed related code changes.', remarks: '' },
-];
-
-function toLocalDateString(date = new Date()) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
 function getYearMonthKey(year, month) {
   return `${year}-${String(month + 1).padStart(2, '0')}`;
 }
@@ -52,26 +83,6 @@ function getWeekStartKey(dateString) {
   const weekStart = new Date(date);
   weekStart.setDate(date.getDate() - date.getDay());
   return toLocalDateString(weekStart);
-}
-
-function normalizeEntryStatus(entry = {}) {
-  const normalized = String(entry.status || '').trim().toLowerCase();
-  const scheduledNonWorkingStatus = getScheduledNonWorkingStatus(entry.date || '');
-  if (ENTRY_STATUSES.has(normalized)) {
-    if (normalized === 'absent' && scheduledNonWorkingStatus) return scheduledNonWorkingStatus;
-    return normalized;
-  }
-  if (entry.amTimeIn || entry.amTimeOut || entry.pmTimeIn || entry.pmTimeOut || Number(entry.hoursRendered) > 0) {
-    return 'present';
-  }
-  if (scheduledNonWorkingStatus) return scheduledNonWorkingStatus;
-  return 'absent';
-}
-
-function formatStatusLabel(status) {
-  return String(status || 'absent')
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, char => char.toUpperCase());
 }
 
 function isWeekday(dateString) {
@@ -140,50 +151,12 @@ class Store {
   }
 
   async _fetchAllEntries(headers, isCurrent) {
-    const pagePath = (page) => `/entries?page=${page}&limit=${INIT_PAGE_LIMIT}`;
-    const first = await this._request(pagePath(1), { headers }, { logoutOn401: true });
-    if (!isCurrent()) return null;
-    if (Array.isArray(first)) return first;
-
-    const byId = new Map();
-    for (const entry of first.items || []) {
-      if (entry?.id && !byId.has(entry.id)) byId.set(entry.id, entry);
-    }
-    let page = 2;
-    let hasMore = Boolean(first.hasMore);
-    while (hasMore) {
-      const chunk = await this._request(pagePath(page), { headers }, { logoutOn401: true });
-      if (!isCurrent()) return null;
-      if (Array.isArray(chunk)) {
-        for (const entry of chunk) {
-          if (entry?.id && !byId.has(entry.id)) byId.set(entry.id, entry);
-        }
-        break;
-      }
-      for (const entry of chunk.items || []) {
-        if (entry?.id && !byId.has(entry.id)) byId.set(entry.id, entry);
-      }
-      hasMore = Boolean(chunk.hasMore);
-      page += 1;
-    }
-    if (page > 2) {
-      // Reconcile: entries created mid-load sort onto page 1 and would be missed.
-      const reconcile = await this._request(pagePath(1), { headers }, { logoutOn401: true });
-      if (!isCurrent()) return null;
-      const fresh = Array.isArray(reconcile) ? reconcile : (reconcile.items || []);
-      const head = [];
-      for (const entry of fresh) {
-        if (entry?.id && !byId.has(entry.id)) {
-          byId.set(entry.id, entry);
-          head.push(entry);
-        }
-      }
-      if (head.length) {
-        const headIds = new Set(head.map(entry => entry.id));
-        return [...head, ...[...byId.values()].filter(entry => !headIds.has(entry.id))];
-      }
-    }
-    return [...byId.values()];
+    return fetchAllEntries({
+      request: (...args) => this._request(...args),
+      headers,
+      isCurrent,
+      pageLimit: INIT_PAGE_LIMIT,
+    });
   }
 
   async init() {
@@ -315,6 +288,7 @@ class Store {
     if (resources.includes('config') && config) {
       this.state.profile = { ...DEFAULT_STATE.profile, ...config.profile };
       this.state.settings = { ...DEFAULT_STATE.settings, ...config.settings };
+      this.state.signOffs = config.signOffs || {};
       const oldTheme = this.state.theme;
       this.state.theme = config.theme || 'dark';
       if (oldTheme !== this.state.theme) {
@@ -332,41 +306,7 @@ class Store {
   }
 
   async _refreshResources(resources = ['entries', 'holidays', 'config']) {
-    if (!this.userId || !this.authToken) return;
-    const resourceSet = new Set(resources);
-    const headers = this.getAuthHeaders();
-    const requests = [];
-
-    if (resourceSet.has('entries')) {
-      requests.push(this._request('/entries', { headers }, { logoutOn401: true }).then(entries => ({ key: 'entries', value: entries })));
-    }
-    if (resourceSet.has('holidays')) {
-      requests.push(this._request('/holidays', { headers }, { logoutOn401: true }).then(holidays => ({ key: 'holidays', value: holidays })));
-    }
-    if (resourceSet.has('config')) {
-      requests.push(this._request('/config', { headers }, { logoutOn401: true }).then(config => ({ key: 'config', value: config })));
-    }
-
-    if (!requests.length) return;
-
-    const results = await Promise.all(requests);
-    if (!this.userId || !this.authToken) return;
-
-    let entries = this.state.entries;
-    let holidays = this.state.holidays;
-    let config = {
-      profile: this.state.profile,
-      settings: this.state.settings,
-      theme: this.state.theme,
-    };
-
-    for (const result of results) {
-      if (result.key === 'entries') entries = result.value;
-      else if (result.key === 'holidays') holidays = result.value;
-      else if (result.key === 'config') config = result.value;
-    }
-
-    this._applyServerState(entries, holidays, config, [...resourceSet]);
+    return refreshResources(this, resources);
   }
 
   _scheduleServerRefresh(resources = ['entries', 'holidays', 'config']) {
@@ -431,7 +371,15 @@ class Store {
     this._setAuth(data.userId, data.username, data.authToken);
   }
 
-  async register(username, password) {
+  async changePassword(currentPassword, newPassword) {
+    return this._request("/auth/change-password", {
+      method: "POST",
+      headers: { ...this.getAuthHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+  }
+
+    async register(username, password) {
     const data = await this._request('/auth/register', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
@@ -588,32 +536,7 @@ class Store {
     if (this.trendDataCacheVersion === entriesVersion && this.trendDataCache) {
       return this.trendDataCache;
     }
-
-    const monthly = Object.create(null);
-    const weekly = Object.create(null);
-
-    for (const entry of this.state.entries) {
-      if (!entry.amTimeOut && !entry.pmTimeOut) continue;
-
-      const monthKey = entry.date.slice(0, 7);
-      if (!monthly[monthKey]) {
-        monthly[monthKey] = { hours: 0, ot: 0, late: 0, undertime: 0, days: 0 };
-      }
-      monthly[monthKey].hours += entry.hoursRendered || 0;
-      monthly[monthKey].ot += entry.overtimeHours || 0;
-      monthly[monthKey].late += entry.lateMinutes || 0;
-      monthly[monthKey].undertime += entry.undertimeMinutes || 0;
-      monthly[monthKey].days += 1;
-
-      const weekKey = getWeekStartKey(entry.date);
-      if (!weekly[weekKey]) {
-        weekly[weekKey] = { hours: 0, days: 0 };
-      }
-      weekly[weekKey].hours += entry.hoursRendered || 0;
-      weekly[weekKey].days += 1;
-    }
-
-    this.trendDataCache = { monthly, weekly };
+    this.trendDataCache = computeTrendData(this.state.entries, getWeekStartKey);
     this.trendDataCacheVersion = entriesVersion;
     return this.trendDataCache;
   }
@@ -623,48 +546,13 @@ class Store {
   }
 
   getEntryOrStatusByDate(date) {
-    const entry = this.getEntryByDate(date);
-    if (entry) return { ...entry, status: normalizeEntryStatus(entry), source: 'entry' };
-
-    const holiday = this.isHoliday(date);
-    if (!holiday) {
-      const scheduledNonWorkingStatus = getScheduledNonWorkingStatus(date);
-      if (!scheduledNonWorkingStatus) return null;
-
-      return {
-        id: `status-${date}`,
-        date,
-        status: scheduledNonWorkingStatus,
-        amTimeIn: '',
-        amTimeOut: '',
-        pmTimeIn: '',
-        pmTimeOut: '',
-        hoursRendered: 0,
-        overtimeHours: 0,
-        lateMinutes: 0,
-        undertimeMinutes: 0,
-        remarks: '',
-        activities: '',
-        source: 'schedule',
-      };
-    }
-
-    return {
-      id: `status-${date}`,
+    return resolveEntryOrStatusByDate({
       date,
-      status: holiday.type === 'holiday' ? 'holiday' : holiday.type === 'vacation_leave' ? 'vacation' : 'leave',
-      amTimeIn: '',
-      amTimeOut: '',
-      pmTimeIn: '',
-      pmTimeOut: '',
-      hoursRendered: 0,
-      overtimeHours: 0,
-      lateMinutes: 0,
-      undertimeMinutes: 0,
-      remarks: holiday.name || '',
-      activities: '',
-      source: 'holiday',
-    };
+      entry: this.getEntryByDate(date),
+      holiday: this.isHoliday(date),
+      scheduledNonWorkingStatus: getScheduledNonWorkingStatus(date),
+      normalizeEntryStatus,
+    });
   }
 
   getActiveEntry() {
@@ -716,6 +604,12 @@ class Store {
     return this.derivedStatusCache;
   }
 
+  async fetchAuditEvents({ limit = 50 } = {}) {
+    return this._request(`/audit?limit=${encodeURIComponent(limit)}`, {
+      headers: this.getAuthHeaders(),
+    }, { logoutOn401: true });
+  }
+
   async fetchEntries({ dateFrom, dateTo, page, limit } = {}) {
     const params = new URLSearchParams();
     if (dateFrom) params.set('date_from', dateFrom);
@@ -759,7 +653,8 @@ class Store {
       body: JSON.stringify({ 
         profile: this.state.profile, 
         settings: this.state.settings, 
-        theme: this.state.theme 
+        theme: this.state.theme,
+        signOffs: this.state.signOffs || {}
       })
     }, { logoutOn401: true }).catch(err => {
       this._consumeLocalSyncSkip();
@@ -768,6 +663,7 @@ class Store {
     this.state.profile = { ...DEFAULT_STATE.profile, ...savedConfig.profile };
     this.state.settings = { ...DEFAULT_STATE.settings, ...savedConfig.settings };
     this.state.theme = savedConfig.theme || 'dark';
+    this.state.signOffs = savedConfig.signOffs || {};
     document.body.className = this.state.theme === 'light' ? 'light-theme' : '';
 
     await this.refreshHolidays([], { force: true }).catch(err => {
@@ -779,7 +675,20 @@ class Store {
     this._notify({ resources: ['config'] });
   }
 
-  // --- Holidays ---
+  // --- Sign-Offs ---
+  async signOffMonth(monthKey, supervisor, remarks = '') {
+    return signOffMonth(this, monthKey, supervisor, remarks);
+  }
+
+  async retractMonthSignOff(monthKey) {
+    return retractMonthSignOff(this, monthKey);
+  }
+
+  getMonthSignOff(monthKey) {
+    return getMonthSignOff(this, monthKey);
+  }
+
+    // --- Holidays ---
   async fetchHolidays(years = []) {
     const normalizedYears = [...new Set((Array.isArray(years) ? years : [])
       .map(year => Number.parseInt(year, 10))
@@ -848,37 +757,11 @@ class Store {
   }
 
   async restoreHoliday(snapshot) {
-    if (!snapshot?.date) throw new Error('Missing holiday snapshot');
-    this._queueLocalSyncSkip();
-    const restored = await this._request(`/holidays/${snapshot.date}`, {
-      method: 'PUT',
-      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify(snapshot)
-    }, { logoutOn401: true }).catch(err => {
-      this._consumeLocalSyncSkip();
-      throw err;
-    });
-
-    const index = this.state.holidays.findIndex(holiday => holiday.date === restored.date);
-    if (index === -1) this.state.holidays.push(restored);
-    else this.state.holidays[index] = restored;
-    this._markResourcesChanged(['holidays']);
-    this._notify({ resources: ['holidays'] });
-    return restored;
+    return restoreHoliday(this, snapshot);
   }
 
   async restoreConfig(snapshot) {
-    if (!snapshot) throw new Error('Missing config snapshot');
-    this._queueLocalSyncSkip();
-    await this._request('/config', {
-      method: 'PUT',
-      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify(snapshot)
-    }, { logoutOn401: true }).catch(err => {
-      this._consumeLocalSyncSkip();
-      throw err;
-    });
-    await this.init();
+    return restoreConfig(this, snapshot);
   }
 
   getHolidaysInMonth(y, m) {
@@ -937,33 +820,9 @@ class Store {
     if (this.summaryStatsCacheVersion === entriesVersion && this.summaryStatsCache) {
       return this.summaryStatsCache;
     }
-
-    const attendedDates = new Set();
-    const stats = {
-      totalHours: 0,
-      totalOvertime: 0,
-      totalLateMinutes: 0,
-      totalUndertimeMinutes: 0,
-      daysAttended: 0,
-    };
-
-    for (const entry of this.state.entries) {
-      const status = normalizeEntryStatus(entry);
-      if (status !== 'present') continue;
-
-      stats.totalHours += parseFloat(entry.hoursRendered) || 0;
-      stats.totalOvertime += parseFloat(entry.overtimeHours) || 0;
-      stats.totalLateMinutes += parseInt(entry.lateMinutes) || 0;
-      stats.totalUndertimeMinutes += parseInt(entry.undertimeMinutes) || 0;
-      if (entry.amTimeOut || entry.pmTimeOut) {
-        attendedDates.add(entry.date);
-      }
-    }
-
-    stats.daysAttended = attendedDates.size;
-    this.summaryStatsCache = stats;
+    this.summaryStatsCache = computeSummaryStats(this.state.entries, normalizeEntryStatus);
     this.summaryStatsCacheVersion = entriesVersion;
-    return stats;
+    return this.summaryStatsCache;
   }
 
   getTotalHours() { return this._getSummaryStats().totalHours; }
@@ -982,27 +841,13 @@ class Store {
     const cached = this.statusSummaryCache.get(cacheKey);
     if (cached) return cached;
 
-    const summary = {
-      present: 0,
-      leave: 0,
-      vacation: 0,
-      holiday: 0,
-      no_ojt: 0,
-      absent: 0,
-    };
-
     const entries = year != null ? this.getEntriesByMonth(year, month) : this.state.entries;
-    entries.forEach(entry => {
-      const status = normalizeEntryStatus(entry);
-      if (Object.hasOwn(summary, status)) summary[status] += 1;
-    });
-
     const holidays = year != null ? this.getHolidaysInMonth(year, month) : this.state.holidays;
-    holidays.forEach(holiday => {
-      if (this.getEntryByDate(holiday.date)) return;
-      if (holiday.type === 'holiday') summary.holiday += 1;
-      else if (holiday.type === 'vacation_leave') summary.vacation += 1;
-      else summary.leave += 1;
+    const summary = computeStatusSummary({
+      entries,
+      holidays,
+      normalizeEntryStatus,
+      getEntryByDate: (date) => this.getEntryByDate(date),
     });
 
     this.statusSummaryCache.set(cacheKey, summary);
@@ -1016,33 +861,17 @@ class Store {
 
     const entries = year != null ? this.getEntriesByMonth(year, month) : this.state.entries;
     const statusSummary = this.getStatusSummary(year, month);
-    let present = 0, late = 0;
-    entries.forEach(e => {
-      const status = normalizeEntryStatus(e);
-      if (status === 'present' && (e.amTimeOut || e.pmTimeOut)) present++;
-      if (status === 'present' && e.lateMinutes > 0) late++;
+    const attendance = computeAttendanceSummary({
+      entries,
+      normalizeEntryStatus,
+      statusSummary,
     });
-    const attendance = {
-      present,
-      late,
-      onLeave: statusSummary.leave + statusSummary.vacation + statusSummary.no_ojt,
-      holidays: statusSummary.holiday,
-    };
     this.attendanceCache.set(cacheKey, attendance);
     return attendance;
   }
 
   getCompletionEstimate() {
-    const forecast = this.getCompletionForecast();
-    if (!forecast) return null;
-    return {
-      avgPerDay: forecast.avgPerDay,
-      daysNeeded: forecast.workingDaysRemaining,
-      estimatedDate: forecast.estimatedDate,
-      remainingHours: forecast.remainingHours,
-      neededAvgHoursPerDay: forecast.neededAvgHoursPerDay,
-      excludedDates: forecast.excludedDates,
-    };
+    return computeCompletionEstimate(this.getCompletionForecast());
   }
 
   getCompletionForecast(today = toLocalDateString(new Date())) {
@@ -1057,7 +886,7 @@ class Store {
   }
 
   _computeCompletionForecast(today) {
-    return buildCompletionForecast({
+    return computeCompletionForecast({
       today,
       requiredHours: this.getRequiredHours(),
       entries: this.state.entries,
@@ -1069,17 +898,7 @@ class Store {
   }
 
   getCurrentWeekHours() {
-    const now = new Date();
-    const dayOfWeek = now.getDay();
-    const monday = new Date(now);
-    monday.setDate(now.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
-    const mondayStr = toLocalDateString(monday);
-    const sunday = new Date(monday);
-    sunday.setDate(monday.getDate() + 6);
-    const sundayStr = toLocalDateString(sunday);
-    return this.state.entries
-      .filter(e => e.date >= mondayStr && e.date <= sundayStr && normalizeEntryStatus(e) === 'present')
-      .reduce((s, e) => s + (parseFloat(e.hoursRendered) || 0), 0);
+    return computeCurrentWeekHours(this.state.entries, normalizeEntryStatus);
   }
 
   getDataQualityAlerts() {
@@ -1087,118 +906,38 @@ class Store {
     if (this.alertsCacheVersion === entriesVersion) {
       return this.alertsCache;
     }
-
-    const alerts = [];
-
-    this.getAllEntriesWithDerivedStatus().forEach(entry => {
-      if (entry.status !== 'present') return;
-
-      if ((entry.amTimeIn && !entry.amTimeOut) || (entry.pmTimeIn && !entry.pmTimeOut)) {
-        alerts.push({ type: 'incomplete', date: entry.date, message: 'Present day has an incomplete clock pair.' });
-      }
-      if ((parseFloat(entry.hoursRendered) || 0) > 0 && !String(entry.activities || '').trim()) {
-        alerts.push({ type: 'missing_activity', date: entry.date, message: 'Worked day is missing activity details.' });
-      }
-      if ((parseFloat(entry.hoursRendered) || 0) > 0 && (parseFloat(entry.hoursRendered) || 0) < 4) {
-        alerts.push({ type: 'short_day', date: entry.date, message: 'Worked day looks unusually short.' });
-      }
-    });
-
+    const alerts = computeDataQualityAlerts(this.getAllEntriesWithDerivedStatus());
     this.alertsCache = alerts;
     this.alertsCacheVersion = entriesVersion;
     return alerts;
   }
 
   getActivityTemplates() {
-    let saved = null;
-    try {
-      saved = JSON.parse(localStorage.getItem('dtr_activity_templates') || 'null');
-    } catch {
-      saved = null;
-    }
-    return Array.isArray(saved) && saved.length ? saved : DEFAULT_ACTIVITY_TEMPLATES;
+    return getActivityTemplates();
   }
 
   saveActivityTemplate(template) {
-    const templates = this.getActivityTemplates().filter(item => item.id !== template.id);
-    templates.unshift({
-      id: template.id || crypto.randomUUID(),
-      name: String(template.name || '').trim(),
-      activities: String(template.activities || '').trim(),
-      remarks: String(template.remarks || '').trim(),
-    });
-    localStorage.setItem('dtr_activity_templates', JSON.stringify(templates.slice(0, 20)));
-    return this.getActivityTemplates();
+    return saveActivityTemplate(template);
   }
 
   deleteActivityTemplate(id) {
-    const templates = this.getActivityTemplates().filter(item => item.id !== id);
-    localStorage.setItem('dtr_activity_templates', JSON.stringify(templates));
-    return templates;
+    return deleteActivityTemplate(id);
   }
 
-  async applyTemplateToDates(templateId, dates = [], { overwrite = false } = {}) {
-    const template = this.getActivityTemplates().find(item => item.id === templateId);
-    if (!template) throw new Error('Template not found');
-
-    for (const date of dates) {
-      const current = this.getEntryByDate(date);
-      if (current) {
-        await this.updateEntry(current.id, {
-          ...current,
-          status: normalizeEntryStatus(current),
-          activities: overwrite || !String(current.activities || '').trim() ? template.activities : current.activities,
-          remarks: overwrite || !String(current.remarks || '').trim() ? template.remarks : current.remarks,
-        });
-      } else {
-        await this.addEntry({
-          date,
-          status: 'absent',
-          activities: template.activities,
-          remarks: template.remarks,
-        });
-      }
-    }
+  async applyTemplateToDates(templateId, dates = [], options = {}) {
+    return applyTemplateToDates(this, templateId, dates, options);
   }
 
   findPreviousWorkingEntry(date) {
-    return this.getAllEntriesWithDerivedStatus().find(entry => entry.date < date && entry.status === 'present' && String(entry.activities || '').trim()) || null;
+    return findPreviousWorkingEntry(this, date);
   }
 
-  async reusePreviousWorkingDay(date, { overwrite = false } = {}) {
-    const previous = this.findPreviousWorkingEntry(date);
-    if (!previous) throw new Error('No previous working day with activities found');
-
-    const current = this.getEntryByDate(date);
-    if (current) {
-      await this.updateEntry(current.id, {
-        ...current,
-        status: normalizeEntryStatus(current),
-        activities: overwrite || !String(current.activities || '').trim() ? previous.activities : current.activities,
-        remarks: overwrite || !String(current.remarks || '').trim() ? previous.remarks : current.remarks,
-      });
-      return;
-    }
-
-    await this.addEntry({
-      date,
-      status: 'absent',
-      activities: previous.activities,
-      remarks: previous.remarks,
-    });
+  async reusePreviousWorkingDay(date, options = {}) {
+    return reusePreviousWorkingDay(this, date, options);
   }
 
-  async batchUpdateStatuses(dates = [], status, { overwrite = false } = {}) {
-    const normalizedStatus = normalizeEntryStatus({ status });
-    for (const date of dates) {
-      const current = this.getEntryByDate(date);
-      if (current) {
-        if (!overwrite && normalizeEntryStatus(current) === normalizedStatus) continue;
-        await this.updateEntry(current.id, { ...current, status: normalizedStatus });
-      } else {
-        await this.addEntry({ date, status: normalizedStatus, remarks: '', activities: '' });
-      }
-    }
+  async batchUpdateStatuses(dates = [], status, options = {}) {
+    return batchUpdateStatuses(this, dates, status, options);
   }
 
   getSummaryPack({ dateFrom, dateTo } = {}) {
@@ -1206,121 +945,35 @@ class Store {
     if (this.summaryPackCacheKey === cacheKey && this.summaryPackCache) {
       return this.summaryPackCache;
     }
-    const entries = this.getAllEntriesWithDerivedStatus()
-      .filter(entry => (!dateFrom || entry.date >= dateFrom) && (!dateTo || entry.date <= dateTo));
-    const totals = entries.reduce((acc, entry) => {
-      acc.totalHours += parseFloat(entry.hoursRendered) || 0;
-      acc.totalOvertime += parseFloat(entry.overtimeHours) || 0;
-      acc.totalLate += parseInt(entry.lateMinutes) || 0;
-      acc.totalUndertime += parseInt(entry.undertimeMinutes) || 0;
-      acc.statuses[entry.status] = (acc.statuses[entry.status] || 0) + 1;
-      return acc;
-    }, {
-      totalHours: 0,
-      totalOvertime: 0,
-      totalLate: 0,
-      totalUndertime: 0,
-      statuses: { present: 0, leave: 0, vacation: 0, holiday: 0, no_ojt: 0, absent: 0 },
+    const pack = computeSummaryPack({
+      entriesWithDerivedStatus: this.getAllEntriesWithDerivedStatus(),
+      dateFrom,
+      dateTo,
     });
-
-    const activityCounts = new Map();
-    entries.forEach(entry => {
-      String(entry.activities || '')
-        .split(/\n|;/)
-        .map(item => item.trim())
-        .filter(Boolean)
-        .forEach(item => activityCounts.set(item, (activityCounts.get(item) || 0) + 1));
-    });
-
-    const highlights = [...activityCounts.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
-      .map(([activity, count]) => ({ activity, count }));
-
-    const pack = {
-      ...totals,
-      entries,
-      highlights,
-      narrative: `Completed ${totals.totalHours.toFixed(1)} hours with ${totals.statuses.present} present day(s) in the selected period.`,
-    };
     this.summaryPackCache = pack;
     this.summaryPackCacheKey = cacheKey;
     return pack;
   }
 
   // --- Data Management ---
-  exportData() { return JSON.stringify(this.state, null, 2); }
+  exportData() {
+    return exportData(this);
+  }
+
   async previewImport(json) {
-    const data = JSON.parse(json);
-    return this._request('/import/preview', {
-      method: 'POST',
-      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify(data)
-    }, { logoutOn401: true });
+    return previewImport(this, json);
   }
 
   async importData(json) {
-    try {
-      const data = JSON.parse(json);
-      this._queueLocalSyncSkip();
-      await this._request('/import', {
-        method: 'POST',
-        headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify(data)
-      }, { logoutOn401: true }).catch(err => {
-        this._consumeLocalSyncSkip();
-        throw err;
-      });
-      
-      // Refresh local state
-      await this.init();
-      return true;
-    } catch (err) {
-      console.error('Import failed:', err);
-      return false;
-    }
+    return importData(this, json);
   }
 
   async restoreEntry(snapshot) {
-    if (!snapshot?.id) throw new Error('Missing entry snapshot');
-
-    const existingIndex = this.state.entries.findIndex(entry => entry.id === snapshot.id);
-    const method = existingIndex === -1 ? 'POST' : 'PUT';
-    const path = existingIndex === -1 ? '/entries' : `/entries/${snapshot.id}`;
-    const body = existingIndex === -1
-      ? snapshot
-      : { ...snapshot, previousState: structuredClone(this.state.entries[existingIndex]) };
-
-    this._queueLocalSyncSkip();
-    const restored = await this._request(path, {
-      method,
-      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify(body)
-    }, { logoutOn401: true }).catch(err => {
-      this._consumeLocalSyncSkip();
-      throw err;
-    });
-
-    this.state.entries = existingIndex === -1
-      ? upsertEntryForDate(this.state.entries, restored)
-      : this.state.entries.map((item, i) => (i === existingIndex ? restored : item));
-    this._markResourcesChanged(['entries']);
-    this._notify({ resources: ['entries'] });
-    return restored;
+    return restoreEntry(this, snapshot);
   }
 
   async restoreStateSnapshot(snapshot) {
-    if (!snapshot || typeof snapshot !== 'object') throw new Error('Missing state snapshot');
-    this._queueLocalSyncSkip();
-    await this._request('/import', {
-      method: 'POST',
-      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify(snapshot)
-    }, { logoutOn401: true }).catch(err => {
-      this._consumeLocalSyncSkip();
-      throw err;
-    });
-    await this.init();
+    return restoreStateSnapshot(this, snapshot);
   }
 
   async forceDeleteEntry(id) {
@@ -1328,24 +981,7 @@ class Store {
   }
 
   async clearAllData() {
-    try {
-      this._queueLocalSyncSkip();
-      await this._request('/import', {
-        method: 'POST',
-        headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify(DEFAULT_STATE)
-      }, { logoutOn401: true }).catch(err => {
-        this._consumeLocalSyncSkip();
-        throw err;
-      });
-      this.state = structuredClone(DEFAULT_STATE);
-      document.body.className = '';
-      this._markResourcesChanged(['entries', 'holidays', 'config']);
-      this._notify({ resources: ['entries', 'holidays', 'config'] });
-    } catch (err) {
-      console.error('Clear data failed:', err);
-      throw err;
-    }
+    return clearAllData(this, DEFAULT_STATE);
   }
 }
 

@@ -3,18 +3,16 @@ import { router } from './router.js';
 import { store } from './store.js';
 import { ICONS, getCurrentDate, requestRender, toast } from './utils.js';
 import { buildJsonExportFilename } from './lib/export-filenames.js';
+import { switchThemeWithTransition } from './lib/theme-transition.js';
 
-import * as dashboard from './pages/dashboard.js';
-import * as timelog from './pages/timelog.js';
-import * as settings from './pages/settings.js';
-import * as calendar from './pages/calendar.js';
-import * as login from './pages/login.js';
+// Page modules are code-split and loaded on demand
 
 const app = document.getElementById('app');
 
 const ICON_CALENDAR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>';
 const ICON_SUN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>';
 const ICON_MOON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
+const ICON_SIDEBAR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>';
 
 const navItems = [
   { path: '/', label: 'Dashboard', icon: ICONS.dashboard },
@@ -26,10 +24,10 @@ const navItems = [
 ];
 
 const routeLoaders = {
-  '/': async () => dashboard,
-  '/timelog': async () => timelog,
-  '/calendar': async () => calendar,
-  '/settings': async () => settings,
+  '/': () => import('./pages/dashboard.js'),
+  '/timelog': () => import('./pages/timelog.js'),
+  '/calendar': () => import('./pages/calendar.js'),
+  '/settings': () => import('./pages/settings.js'),
   '/dtr': () => import('./pages/dtr.js'),
   '/reports': () => import('./pages/reports.js'),
 };
@@ -109,22 +107,33 @@ function renderLoadingState() {
 }
 
 function renderShell() {
+  const isCollapsed = localStorage.getItem('ojt_sidebar_collapsed') === 'true';
   return `
-    <div id="app-shell">
+    <div id="app-shell" class="${isCollapsed ? 'sidebar-collapsed' : ''}">
       <aside class="sidebar" id="sidebar">
         <div class="sidebar-brand">
-          <div class="brand-icon">${ICONS.clock}</div>
-          <div class="brand-text"><h1>DTR Tracker</h1><span>OJT Time Record</span></div>
+          <div class="brand-main">
+            <div class="brand-icon">${ICONS.clock}</div>
+            <div class="brand-text"><h1>DTR Tracker</h1><span>OJT Time Record</span></div>
+          </div>
+          <button class="sidebar-toggle-btn" id="btn-toggle-sidebar" title="Toggle Sidebar" aria-label="Toggle Sidebar">
+            ${ICON_SIDEBAR}
+          </button>
         </div>
         <nav class="sidebar-nav">
-          ${navItems.map(item => `<a href="#${item.path}" class="nav-item" data-nav-path="${item.path}">${item.icon} ${item.label}</a>`).join('')}
+          ${navItems.map(item => `
+            <a href="#${item.path}" class="nav-item" data-nav-path="${item.path}" title="${item.label}">
+              ${item.icon}
+              <span class="nav-item-label">${item.label}</span>
+            </a>
+          `).join('')}
         </nav>
         <div class="sidebar-footer">
-          <div style="font-size:0.8rem; color:var(--text-muted); padding-bottom:12px; border-bottom:1px solid var(--border); margin-bottom:12px;">
-            Logged in as <b id="sidebar-username" style="color:var(--text)"></b>
-            <a href="#" id="btn-logout" style="color:var(--primary); text-decoration:none; float:right;">Logout</a>
+          <div class="sidebar-user-block">
+            <span>Logged in as <b id="sidebar-username" style="color:var(--text)"></b></span>
+            <a href="#" id="btn-logout" style="color:var(--primary); text-decoration:none;">Logout</a>
           </div>
-          <button class="theme-toggle" id="theme-toggle"></button>
+          <button class="theme-toggle" id="theme-toggle" title="Switch Theme"></button>
           <div class="progress-mini" style="margin-top:12px">
             <div class="progress-mini-bar" id="sidebar-progress-bar"></div>
           </div>
@@ -147,12 +156,24 @@ function ensureShell() {
 
 function bindShellEvents() {
   if (shellBound) return;
-  document.getElementById('theme-toggle')?.addEventListener('click', async () => {
+  document.getElementById('theme-toggle')?.addEventListener('click', async (event) => {
     try {
-      await store.setTheme(store.state.theme === 'dark' ? 'light' : 'dark');
+      const nextTheme = store.state.theme === 'dark' ? 'light' : 'dark';
+      await switchThemeWithTransition(store, nextTheme, event, () => {
+        updateShellChrome(router.getCurrentPath?.() || window.location.hash.slice(1) || '/');
+      });
     } catch (err) {
       toast(err.message || 'Failed to update theme', 'error');
     }
+  });
+
+  document.getElementById('btn-toggle-sidebar')?.addEventListener('click', () => {
+    const shell = document.getElementById('app-shell');
+    if (!shell) return;
+    const isCollapsed = shell.classList.toggle('sidebar-collapsed');
+    try {
+      localStorage.setItem('ojt_sidebar_collapsed', String(isCollapsed));
+    } catch {}
   });
 
   document.getElementById('btn-logout')?.addEventListener('click', (e) => {
@@ -176,7 +197,7 @@ function updateShellChrome(activePath) {
 
   const themeToggleEl = document.getElementById('theme-toggle');
   if (themeToggleEl) {
-    themeToggleEl.innerHTML = `${theme === 'dark' ? ICON_SUN : ICON_MOON} ${theme === 'dark' ? 'Light Mode' : 'Dark Mode'}`;
+    themeToggleEl.innerHTML = `${theme === 'dark' ? ICON_SUN : ICON_MOON} <span>${theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>`;
   }
 
   const progressBarEl = document.getElementById('sidebar-progress-bar');
@@ -205,6 +226,8 @@ async function renderPage(path) {
   const token = ++renderToken;
 
   if (!store.userId) {
+    const login = await import('./pages/login.js');
+    if (token !== renderToken) return;
     app.innerHTML = `<div style="display:flex; justify-content:center; align-items:center; min-height:100vh;">${login.render()}</div>`;
     if (login.mount) login.mount();
     shellBound = false;
@@ -252,8 +275,15 @@ async function renderPage(path) {
   currentPageModule = pageModule;
 }
 
+function isUserEditing() {
+  const active = document.activeElement;
+  if (!active) return false;
+  const tag = active.tagName;
+  return (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') && !active.readOnly;
+}
+
 function scheduleActiveRouteRender() {
-  if (document.querySelector('.modal-overlay')) {
+  if (document.querySelector('.modal-overlay') || isUserEditing()) {
     pendingRouteRender = true;
     return;
   }
@@ -378,12 +408,37 @@ document.addEventListener('modal-closed', () => {
   queueActiveRouteRender();
 });
 
+document.addEventListener('focusout', () => {
+  if (!pendingRouteRender) return;
+  setTimeout(() => {
+    if (pendingRouteRender && !isUserEditing() && !document.querySelector('.modal-overlay')) {
+      pendingRouteRender = false;
+      queueActiveRouteRender();
+    }
+  }, 50);
+});
+
 document.addEventListener('render-auth', () => {
   if (!store.userId) void renderPage(getActivePath());
 });
 
-if ('serviceWorker' in navigator && location.hostname !== 'localhost') {
+if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').catch(() => {});
 }
+
+window.addEventListener('offline', () => {
+  let banner = document.getElementById('offline-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'offline-banner';
+    banner.className = 'offline-banner';
+    banner.textContent = 'Offline Mode: Viewing cached data';
+    document.body.prepend(banner);
+  }
+});
+window.addEventListener('online', () => {
+  const banner = document.getElementById('offline-banner');
+  if (banner) banner.remove();
+});
 
 router.resolve();

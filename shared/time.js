@@ -30,3 +30,24 @@ export function calculateHours(timeIn, timeOut, breakMins = 0) {
   if (start == null || end == null) return 0;
   return Math.max(0, (end - start - breakMins) / 60);
 }
+
+export function calculateLate(timeIn, expected) {
+  const actual = parseTimeStrict(timeIn);
+  const baseline = parseTimeStrict(expected);
+  if (actual == null || baseline == null) return 0;
+  return Math.max(0, actual - baseline);
+}
+
+export function calculateUndertime(timeOut, expected) {
+  const actual = parseTimeStrict(timeOut);
+  const baseline = parseTimeStrict(expected);
+  if (actual == null || baseline == null) return 0;
+  return Math.max(0, baseline - actual);
+}
+
+export function calculateEntryHours(entry = {}) {
+  let total = 0;
+  if (entry.amTimeIn && entry.amTimeOut) total += calculateHours(entry.amTimeIn, entry.amTimeOut);
+  if (entry.pmTimeIn && entry.pmTimeOut) total += calculateHours(entry.pmTimeIn, entry.pmTimeOut);
+  return total;
+}

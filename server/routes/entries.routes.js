@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/require-auth.js';
 import * as entries from '../services/entry.service.js';
-import { getErrorStatus } from './errors.js';
+import { sendErrorResponse } from './errors.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -14,8 +14,7 @@ router.get('/', async (req, res) => {
     const limit = Number.parseInt(req.query.limit, 10);
     res.json(await entries.listEntries(req.userId, { dateFrom, dateTo, page, limit }));
   } catch (err) {
-    console.error('Fetch entries error:', err);
-    res.status(500).json({ error: 'Failed to fetch entries' });
+    sendErrorResponse(res, err, 'Failed to fetch entries', 'Fetch entries error:');
   }
 });
 
@@ -23,8 +22,7 @@ router.post('/', async (req, res) => {
   try {
     res.json(await entries.createEntry(req.userId, req.body));
   } catch (err) {
-    console.error('Add entry error:', err);
-    res.status(getErrorStatus(err)).json({ error: err.message || 'Failed to add entry' });
+    sendErrorResponse(res, err, 'Failed to add entry', 'Add entry error:');
   }
 });
 
@@ -36,8 +34,7 @@ router.put('/:id', async (req, res) => {
     }
     res.json(result.body);
   } catch (err) {
-    console.error('Update entry error:', err);
-    res.status(getErrorStatus(err)).json({ error: err.message || 'Failed to update entry' });
+    sendErrorResponse(res, err, 'Failed to update entry', 'Update entry error:');
   }
 });
 
@@ -49,8 +46,7 @@ router.delete('/:id', async (req, res) => {
     }
     res.json(result.body);
   } catch (err) {
-    console.error('Delete entry error:', err);
-    res.status(getErrorStatus(err)).json({ error: err.message || 'Failed to delete entry' });
+    sendErrorResponse(res, err, 'Failed to delete entry', 'Delete entry error:');
   }
 });
 

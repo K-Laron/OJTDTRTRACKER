@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import * as auth from '../services/auth.service.js';
 import { clearAuthFailures, isAuthLimited, recordAuthFailure } from '../middleware/auth-throttle.js';
-import { getErrorStatus } from './errors.js';
+import { sendErrorResponse } from './errors.js';
+import { requireAuth } from '../middleware/require-auth.js';
 
 const router = Router();
 
@@ -17,8 +18,7 @@ router.post('/register', async (req, res) => {
     }
     res.json(result.body);
   } catch (err) {
-    console.error('Registration error:', err);
-    res.status(getErrorStatus(err)).json({ error: err.message || 'Registration failed' });
+    sendErrorResponse(res, err, 'Registration failed', 'Registration error:');
   }
 });
 
@@ -40,8 +40,20 @@ router.post('/login', async (req, res) => {
     }
     res.json(result.body);
   } catch (err) {
-    console.error('Login error:', err);
-    res.status(getErrorStatus(err)).json({ error: err.message || 'Login failed' });
+    sendErrorResponse(res, err, 'Login failed', 'Login error:');
+  }
+});
+
+
+router.post('/change-password', requireAuth, async (req, res) => {
+  try {
+    const result = await auth.changePassword(req.userId, req.body);
+    if (result.status !== 200) {
+      return res.status(result.status).json(result.body);
+    }
+    res.json(result.body);
+  } catch (err) {
+    sendErrorResponse(res, err, 'Failed to change password', 'Change password error:');
   }
 });
 

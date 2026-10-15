@@ -6,6 +6,15 @@ import { notifyClients } from '../sync-hub.js';
 import { writeAuditEvent } from './audit.service.js';
 import { cleanHolidayForAudit } from './snapshots.js';
 
+const userSyncTimes = new Map();
+const SYNC_CACHE_TTL_MS = 15 * 60 * 1000;
+
+function clearUserSyncTime(userId) {
+  for (const key of userSyncTimes.keys()) {
+    if (key.startsWith(`${userId}:`)) userSyncTimes.delete(key);
+  }
+}
+
 function getHolidaySyncYears(config) {
   const currentYear = new Date().getFullYear();
   const startYear = Number.parseInt(config?.profile?.startDate?.slice(0, 4), 10);
@@ -42,19 +51,28 @@ export async function listHolidays(userId, query = {}) {
     Holiday.find({ userId }).sort({ date: 1 }).lean(),
   ]);
 
+  const syncYears = getRequestedHolidaySyncYears(query, config);
+  const syncKey = `${userId}:${syncYears.join(',')}`;
+  const lastSync = userSyncTimes.get(syncKey) || 0;
+  const isForced = query.force === true || query.force === 'true';
+  const shouldSync = isForced || (Date.now() - lastSync) > SYNC_CACHE_TTL_MS;
+
   let holidays = existingHolidays;
-  try {
-    const syncResult = await syncPhilippinePublicHolidays({
-      userId,
-      years: getRequestedHolidaySyncYears(query, config),
-      HolidayModel: Holiday,
-      existingHolidays,
-    });
-    if (syncResult.changed) {
-      holidays = await Holiday.find({ userId }).sort({ date: 1 }).lean();
+  if (shouldSync) {
+    try {
+      const syncResult = await syncPhilippinePublicHolidays({
+        userId,
+        years: syncYears,
+        HolidayModel: Holiday,
+        existingHolidays,
+      });
+      userSyncTimes.set(syncKey, Date.now());
+      if (syncResult.changed) {
+        holidays = await Holiday.find({ userId }).sort({ date: 1 }).lean();
+      }
+    } catch (syncErr) {
+      console.error('Philippine holiday sync error:', syncErr);
     }
-  } catch (syncErr) {
-    console.error('Philippine holiday sync error:', syncErr);
   }
 
   return holidays;
@@ -81,6 +99,7 @@ export async function createHoliday(userId, body = {}) {
   });
 
   if (result.status === 200) {
+    clearUserSyncTime(userId);
     notifyClients(userId, ['holidays']);
   }
   return result;

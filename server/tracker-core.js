@@ -5,10 +5,14 @@ import {
 } from '../shared/work-schedule.js';
 import { buildCompletionForecast } from '../shared/forecast.js';
 import {
-  calculateHours as sharedCalculateHours,
+  calculateEntryHours,
+  calculateHours,
+  calculateLate,
+  calculateUndertime,
   parseTimeStrict,
   toLocalDateString as sharedToLocalDateString,
 } from '../shared/time.js';
+import { ValidationError } from './routes/errors.js';
 
 export const DEFAULT_SETTINGS = {
   requiredHours: 486,
@@ -44,30 +48,12 @@ export function parseTime(value) {
   return parseTimeStrict(value);
 }
 
-export function calculateHours(timeIn, timeOut, breakMins = 0) {
-  return sharedCalculateHours(timeIn, timeOut, breakMins);
-}
-
-export function calculateEntryHours(entry) {
-  let total = 0;
-  if (entry.amTimeIn && entry.amTimeOut) total += calculateHours(entry.amTimeIn, entry.amTimeOut);
-  if (entry.pmTimeIn && entry.pmTimeOut) total += calculateHours(entry.pmTimeIn, entry.pmTimeOut);
-  return total;
-}
-
-export function calculateLate(timeIn, expected) {
-  const actual = parseTime(timeIn);
-  const baseline = parseTime(expected);
-  if (actual == null || baseline == null) return 0;
-  return Math.max(0, actual - baseline);
-}
-
-export function calculateUndertime(timeOut, expected) {
-  const actual = parseTime(timeOut);
-  const baseline = parseTime(expected);
-  if (actual == null || baseline == null) return 0;
-  return Math.max(0, baseline - actual);
-}
+export {
+  calculateEntryHours,
+  calculateHours,
+  calculateLate,
+  calculateUndertime,
+};
 
 function normalizeText(value) {
   return value == null ? '' : String(value).trim();
@@ -77,7 +63,7 @@ function normalizeStatus(value, fallback = 'absent') {
   const normalized = normalizeText(value).toLowerCase();
   if (!normalized) return fallback;
   if (!ENTRY_STATUSES.has(normalized)) {
-    throw new Error('Entry status is invalid');
+    throw new ValidationError('Entry status is invalid');
   }
   return normalized;
 }
@@ -94,7 +80,7 @@ function normalizeTime(value, label) {
   const normalized = normalizeText(value);
   if (!normalized) return '';
   if (parseTime(normalized) == null) {
-    throw new Error(`${label} must be a valid HH:MM time`);
+    throw new ValidationError(`${label} must be a valid HH:MM time`);
   }
   return normalized;
 }
@@ -102,11 +88,11 @@ function normalizeTime(value, label) {
 function assertDate(value, label = 'Date') {
   const normalized = normalizeText(value);
   if (!DATE_RE.test(normalized)) {
-    throw new Error(`${label} must be in YYYY-MM-DD format`);
+    throw new ValidationError(`${label} must be in YYYY-MM-DD format`);
   }
   const parsed = new Date(`${normalized}T00:00:00`);
   if (Number.isNaN(parsed.getTime())) {
-    throw new Error(`${label} is invalid`);
+    throw new ValidationError(`${label} is invalid`);
   }
   return normalized;
 }
@@ -120,7 +106,7 @@ export function normalizeSettings(settings = {}) {
   if (settings.lastBackupDate) {
     const parsed = new Date(settings.lastBackupDate).getTime();
     if (Number.isNaN(parsed)) {
-      throw new Error('Last Backup Date is invalid');
+      throw new ValidationError('Last Backup Date is invalid');
     }
     lastBackupDate = new Date(parsed).toISOString();
   }
@@ -158,13 +144,13 @@ export function sanitizeHoliday(input = {}) {
   const source = normalizeText(input.source) || 'manual';
 
   if (!name) {
-    throw new Error('Holiday name is required');
+    throw new ValidationError('Holiday name is required');
   }
   if (!HOLIDAY_TYPES.has(type)) {
-    throw new Error('Holiday type is invalid');
+    throw new ValidationError('Holiday type is invalid');
   }
   if (!HOLIDAY_SOURCES.has(source)) {
-    throw new Error('Holiday source is invalid');
+    throw new ValidationError('Holiday source is invalid');
   }
 
   return { date, name, type, source };
@@ -280,7 +266,7 @@ function sanitizeEntryWithEffectiveSettings(input = {}, effectiveSettings, { exi
   const merged = { ...base, ...input };
   const id = normalizeText(merged.id);
   if (requireId && !id) {
-    throw new Error('Entry id is required');
+    throw new ValidationError('Entry id is required');
   }
 
   const date = assertDate(merged.date, 'Entry date');
@@ -296,13 +282,22 @@ function sanitizeEntryWithEffectiveSettings(input = {}, effectiveSettings, { exi
   const pmTimeOut = isPresentStatus(status) ? rawPmTimeOut : '';
 
   if (isPresentStatus(status) && !amTimeIn && !pmTimeIn) {
-    throw new Error('At least one time in is required');
+    throw new ValidationError('At least one time in is required');
   }
   if (amTimeIn && amTimeOut && parseTime(amTimeIn) >= parseTime(amTimeOut)) {
-    throw new Error('AM Time Out must be after AM Time In');
+    throw new ValidationError('AM Time Out must be after AM Time In');
   }
   if (pmTimeIn && pmTimeOut && parseTime(pmTimeIn) >= parseTime(pmTimeOut)) {
-    throw new Error('PM Time Out must be after PM Time In');
+    throw new ValidationError('PM Time Out must be after PM Time In');
+  }
+  if (amTimeIn && pmTimeIn && parseTime(amTimeIn) >= parseTime(pmTimeIn)) {
+    throw new ValidationError('PM Time In must be after AM Time In');
+  }
+  if (amTimeOut && pmTimeIn && parseTime(amTimeOut) > parseTime(pmTimeIn)) {
+    throw new ValidationError('PM Time In cannot be before AM Time Out');
+  }
+  if (amTimeOut && pmTimeOut && parseTime(amTimeOut) >= parseTime(pmTimeOut)) {
+    throw new ValidationError('PM Time Out must be after AM Time Out');
   }
 
   const entry = {
@@ -347,7 +342,7 @@ export function calculateCompletionForecast({ today, requiredHours, entries = []
 
 export function sanitizeImportPayload(payload = {}) {
   if (payload == null || typeof payload !== 'object' || Array.isArray(payload)) {
-    throw new Error('Import payload must be an object');
+    throw new ValidationError('Import payload must be an object');
   }
 
   const settings = normalizeSettings(payload.settings || {});
@@ -356,28 +351,33 @@ export function sanitizeImportPayload(payload = {}) {
   const entries = [];
   const holidays = [];
   const entryIds = new Set();
+  const entryDates = new Set();
   const holidayDates = new Set();
 
   if (payload.entries != null && !Array.isArray(payload.entries)) {
-    throw new Error('Entries must be an array');
+    throw new ValidationError('Entries must be an array');
   }
   if (payload.holidays != null && !Array.isArray(payload.holidays)) {
-    throw new Error('Holidays must be an array');
+    throw new ValidationError('Holidays must be an array');
   }
 
   for (const rawEntry of payload.entries || []) {
     const entry = sanitizeEntryWithEffectiveSettings(rawEntry, settings, { requireId: true });
     if (entryIds.has(entry.id)) {
-      throw new Error(`Duplicate entry id: ${entry.id}`);
+      throw new ValidationError(`Duplicate entry id: ${entry.id}`);
+    }
+    if (entryDates.has(entry.date)) {
+      throw new ValidationError(`Duplicate entry date: ${entry.date}`);
     }
     entryIds.add(entry.id);
+    entryDates.add(entry.date);
     entries.push(entry);
   }
 
   for (const rawHoliday of payload.holidays || []) {
     const holiday = sanitizeHoliday(rawHoliday);
     if (holidayDates.has(holiday.date)) {
-      throw new Error(`Duplicate holiday date: ${holiday.date}`);
+      throw new ValidationError(`Duplicate holiday date: ${holiday.date}`);
     }
     holidayDates.add(holiday.date);
     holidays.push(holiday);

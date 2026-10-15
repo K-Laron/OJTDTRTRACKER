@@ -1,11 +1,22 @@
 import { store } from './store.js';
 import { getScheduleSegments, getScheduledWorkWindow } from '../shared/work-schedule.js';
+import {
+  calculateEntryHours,
+  calculateHours,
+  calculateLate,
+  calculateUndertime,
+  parseTimeStrict,
+} from '../shared/time.js';
 
-// --- Time Parsing & Formatting ---
+export {
+  calculateEntryHours,
+  calculateHours,
+  calculateLate,
+  calculateUndertime,
+};
+
 export function parseTime(t) {
-  if (!t) return null;
-  const [h, m] = t.split(':').map(Number);
-  return h * 60 + m;
+  return parseTimeStrict(t);
 }
 
 export function formatTimeMins(mins) {
@@ -19,37 +30,13 @@ export function fmtTimeStr(t) {
   const format = store.state.settings.timeFormat || '12h';
   if (format === '24h') return t;
   
-  let [h, m] = t.split(':').map(Number);
+  const parsed = parseTimeStrict(t);
+  if (parsed == null) return '--';
+  let h = Math.floor(parsed / 60);
+  const m = parsed % 60;
   const ampm = h >= 12 ? 'PM' : 'AM';
   h = h % 12 || 12;
   return `${h}:${String(m).padStart(2, '0')} ${ampm}`;
-}
-
-// --- Hours Calculation ---
-export function calculateHours(timeIn, timeOut, breakMins = 0) {
-  const i = parseTime(timeIn), o = parseTime(timeOut);
-  if (i == null || o == null) return 0;
-  return Math.max(0, (o - i - breakMins) / 60);
-}
-
-export function calculateLate(timeIn, expected) {
-  const i = parseTime(timeIn), e = parseTime(expected);
-  if (i == null || e == null) return 0;
-  return Math.max(0, i - e);
-}
-
-export function calculateUndertime(timeOut, expected) {
-  const o = parseTime(timeOut), e = parseTime(expected);
-  if (o == null || e == null) return 0;
-  return Math.max(0, e - o);
-}
-
-// Calculates total hours from an entry with AM/PM split
-export function calculateEntryHours(e) {
-  let total = 0;
-  if (e.amTimeIn && e.amTimeOut) total += calculateHours(e.amTimeIn, e.amTimeOut);
-  if (e.pmTimeIn && e.pmTimeOut) total += calculateHours(e.pmTimeIn, e.pmTimeOut);
-  return total;
 }
 
 // --- Display Formatting ---

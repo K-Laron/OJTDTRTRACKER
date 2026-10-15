@@ -1,5 +1,4 @@
 import { store } from '../store.js';
-import { request as apiRequest } from '../api/client.js';
 import { closeModal, fmtDate, fmtHours, fmtMinutes, fmtTimeStr, MONTHS, openModal, toast, ICONS, requestRender } from '../utils.js';
 
 let activeTab = 'overview';

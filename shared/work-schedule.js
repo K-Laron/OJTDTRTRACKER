@@ -47,16 +47,17 @@ function buildProfileSchedule(settings = {}) {
   };
 }
 
-export function isFourDayWorkweekFriday(dateString = '') {
+export function isFourDayWorkweekFriday(dateString = '', day = null) {
+  const dow = day != null ? day : (dateString ? getDayOfWeek(dateString) : -1);
   return Boolean(dateString)
     && dateString >= FOUR_DAY_WORKWEEK_START
-    && getDayOfWeek(dateString) === 5;
+    && dow === 5;
 }
 
-export function isScheduledWorkday(dateString = '') {
-  const day = getDayOfWeek(dateString);
+export function isScheduledWorkday(dateString = '', dateObj = null) {
+  const day = dateObj ? dateObj.getDay() : getDayOfWeek(dateString);
   if (day === 0 || day === 6) return false;
-  if (isFourDayWorkweekFriday(dateString)) return false;
+  if (day === 5 && Boolean(dateString) && dateString >= FOUR_DAY_WORKWEEK_START) return false;
   return true;
 }
 

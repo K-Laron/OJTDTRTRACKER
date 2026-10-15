@@ -1,6 +1,7 @@
 import { User } from '../models.js';
 import { createAuthToken, hashAuthToken } from './auth-token.js';
 import { hashPassword, isHashedPassword, verifyPassword } from './password.js';
+import { ValidationError } from '../routes/errors.js';
 
 const USERNAME_RE = /^[a-z0-9._-]+$/;
 const MIN_USERNAME_LENGTH = 3;
@@ -17,20 +18,20 @@ export function validateAuthInput({ username, password } = {}, { enforcePassword
   const normalizedPassword = String(password || '');
 
   if (!normalizedUsername || !normalizedPassword) {
-    throw new Error('Username and password are required');
+    throw new ValidationError('Username and password are required');
   }
   if (normalizedUsername.length < MIN_USERNAME_LENGTH || normalizedUsername.length > MAX_USERNAME_LENGTH) {
-    throw new Error(`Username must be ${MIN_USERNAME_LENGTH} to ${MAX_USERNAME_LENGTH} characters`);
+    throw new ValidationError(`Username must be ${MIN_USERNAME_LENGTH} to ${MAX_USERNAME_LENGTH} characters`);
   }
   if (!USERNAME_RE.test(normalizedUsername)) {
-    throw new Error('Username can only use letters, numbers, dot, underscore, and hyphen');
+    throw new ValidationError('Username can only use letters, numbers, dot, underscore, and hyphen');
   }
   // Login keeps accepting stored legacy passwords that predate the policy.
   if (normalizedPassword.length > MAX_PASSWORD_LENGTH) {
-    throw new Error(`Password must be ${MAX_PASSWORD_LENGTH} characters or fewer`);
+    throw new ValidationError(`Password must be ${MAX_PASSWORD_LENGTH} characters or fewer`);
   }
   if (enforcePasswordPolicy && normalizedPassword.length < MIN_PASSWORD_LENGTH) {
-    throw new Error(`Password must be ${MIN_PASSWORD_LENGTH} to ${MAX_PASSWORD_LENGTH} characters`);
+    throw new ValidationError(`Password must be ${MIN_PASSWORD_LENGTH} to ${MAX_PASSWORD_LENGTH} characters`);
   }
 
   return { username: normalizedUsername, password: normalizedPassword };
@@ -81,4 +82,35 @@ export async function login({ username, password }) {
   if (!verified) return { status: 401, body: { error: 'Invalid credentials' } };
 
   return { status: 200, body: await issueAuthResponse(user) };
+}
+
+export async function changePassword(userId, { currentPassword, newPassword } = {}) {
+  const current = String(currentPassword || "");
+  const next = String(newPassword || "");
+
+  if (!current || !next) {
+    throw new ValidationError("Current password and new password are required");
+  }
+  if (next.length < MIN_PASSWORD_LENGTH || next.length > MAX_PASSWORD_LENGTH) {
+    throw new ValidationError(`Password must be ${MIN_PASSWORD_LENGTH} to ${MAX_PASSWORD_LENGTH} characters`);
+  }
+
+  const user = await User.findById(userId);
+  if (!user) return { status: 404, body: { error: "User not found" } };
+
+  let verified = false;
+  if (isHashedPassword(user.password)) {
+    verified = await verifyPassword(current, user.password);
+    if (!verified && user.password === current) {
+      verified = true;
+    }
+  } else {
+    verified = user.password === current;
+  }
+
+  if (!verified) return { status: 401, body: { error: "Current password is incorrect" } };
+
+  user.password = await hashPassword(next);
+  await user.save();
+  return { status: 200, body: { success: true, message: "Password changed successfully" } };
 }

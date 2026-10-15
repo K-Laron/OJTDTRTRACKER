@@ -1,5 +1,9 @@
 const CACHE = 'dtr-v1';
-self.addEventListener('install', e => { self.skipWaiting(); });
+
+self.addEventListener('install', e => {
+  self.skipWaiting();
+});
+
 self.addEventListener('activate', e => {
   e.waitUntil(
     caches.keys()
@@ -7,9 +11,19 @@ self.addEventListener('activate', e => {
       .then(() => clients.claim())
   );
 });
+
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (url.pathname.toLowerCase().startsWith('/api/')) {
+    return;
+  }
+  if (e.request.mode === 'navigate') {
+    e.respondWith(
+      fetch(e.request).catch(async () => {
+        const cache = await caches.open(CACHE);
+        return (await cache.match('/index.html')) || (await cache.match('/'));
+      })
+    );
     return;
   }
   e.respondWith(

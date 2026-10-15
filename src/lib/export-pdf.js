@@ -100,9 +100,14 @@ export function exportDTRtoPDF(entries, holidays, month, year, profile, settings
 
     doc.setFontSize(8);
     doc.line(pageWidth - MARGIN - 60, sigY, pageWidth - MARGIN, sigY);
-    doc.text(profile.supervisor || '_______________', pageWidth - MARGIN - 30, sigY + 4, { align: 'center' });
+    const supName = signOff?.supervisor || profile.supervisor || '_______________';
+    doc.text(supName, pageWidth - MARGIN - 30, sigY + 4, { align: 'center' });
     doc.setFontSize(6.5);
     doc.text('Verified By (Supervisor)', pageWidth - MARGIN - 30, sigY + 8, { align: 'center' });
+    if (signOff) {
+      doc.setFontSize(6);
+      doc.text(`Verified: ${new Date(signOff.signedAt).toLocaleDateString()}`, pageWidth - MARGIN - 30, sigY + 11, { align: 'center' });
+    }
 
     doc.save(buildDTRExportFilename({
       profileName: profile.name,
