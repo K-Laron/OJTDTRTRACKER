@@ -111,6 +111,52 @@ test('sanitizeEntry measures late and undertime against the historical split sch
   assert.equal(onProfile.undertimeMinutes, 60);
 });
 
+test('sanitizeEntry rejects overlapping or inverted AM and PM sessions', () => {
+  assert.throws(() => {
+    sanitizeEntry({
+      id: 'inv-1',
+      date: '2026-03-21',
+      status: 'present',
+      amTimeIn: '08:00',
+      amTimeOut: '13:00',
+      pmTimeIn: '12:30',
+      pmTimeOut: '17:00',
+    });
+  }, /PM Time In cannot be before AM Time Out/);
+
+  assert.throws(() => {
+    sanitizeEntry({
+      id: 'inv-2',
+      date: '2026-03-21',
+      status: 'present',
+      amTimeIn: '13:00',
+      pmTimeIn: '12:00',
+    });
+  }, /PM Time In must be after AM Time In/);
+
+  assert.throws(() => {
+    sanitizeEntry({
+      id: 'inv-3',
+      date: '2026-03-21',
+      status: 'present',
+      amTimeIn: '08:00',
+      amTimeOut: '17:00',
+      pmTimeOut: '16:00',
+    });
+  }, /PM Time Out must be after AM Time Out/);
+});
+
+test('sanitizeImportPayload rejects duplicate entry dates', () => {
+  assert.throws(() => {
+    sanitizeImportPayload({
+      entries: [
+        { id: 'e1', date: '2026-03-21', amTimeIn: '08:00', amTimeOut: '12:00' },
+        { id: 'e2', date: '2026-03-21', amTimeIn: '13:00', amTimeOut: '17:00' },
+      ],
+    });
+  }, /Duplicate entry date/);
+});
+
 test('sanitizeImportPayload rejects duplicate ids and duplicate holiday dates', () => {
   assert.throws(() => {
     sanitizeImportPayload({

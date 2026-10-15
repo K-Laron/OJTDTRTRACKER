@@ -290,6 +290,15 @@ function sanitizeEntryWithEffectiveSettings(input = {}, effectiveSettings, { exi
   if (pmTimeIn && pmTimeOut && parseTime(pmTimeIn) >= parseTime(pmTimeOut)) {
     throw new ValidationError('PM Time Out must be after PM Time In');
   }
+  if (amTimeIn && pmTimeIn && parseTime(amTimeIn) >= parseTime(pmTimeIn)) {
+    throw new ValidationError('PM Time In must be after AM Time In');
+  }
+  if (amTimeOut && pmTimeIn && parseTime(amTimeOut) > parseTime(pmTimeIn)) {
+    throw new ValidationError('PM Time In cannot be before AM Time Out');
+  }
+  if (amTimeOut && pmTimeOut && parseTime(amTimeOut) >= parseTime(pmTimeOut)) {
+    throw new ValidationError('PM Time Out must be after AM Time Out');
+  }
 
   const entry = {
     id,
@@ -342,6 +351,7 @@ export function sanitizeImportPayload(payload = {}) {
   const entries = [];
   const holidays = [];
   const entryIds = new Set();
+  const entryDates = new Set();
   const holidayDates = new Set();
 
   if (payload.entries != null && !Array.isArray(payload.entries)) {
@@ -356,7 +366,11 @@ export function sanitizeImportPayload(payload = {}) {
     if (entryIds.has(entry.id)) {
       throw new ValidationError(`Duplicate entry id: ${entry.id}`);
     }
+    if (entryDates.has(entry.date)) {
+      throw new ValidationError(`Duplicate entry date: ${entry.date}`);
+    }
     entryIds.add(entry.id);
+    entryDates.add(entry.date);
     entries.push(entry);
   }
 

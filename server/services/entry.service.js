@@ -10,6 +10,7 @@ import { withOptionalTransaction } from '../db.js';
 import { notifyClients } from '../sync-hub.js';
 import { writeAuditEvent } from './audit.service.js';
 import { cleanEntryForAudit } from './snapshots.js';
+import { ValidationError } from '../routes/errors.js';
 
 async function getUserSettings(userId, session = null) {
   const query = Config.findOne({ userId });
@@ -60,6 +61,12 @@ export async function createEntry(userId, body) {
   const { result: entry } = await withOptionalTransaction(async (session) => {
     const settings = await getUserSettings(userId, session);
     const sanitizedEntry = sanitizeEntry(body, settings, { requireId: true });
+    const existingQuery = Entry.findOne({ userId, date: sanitizedEntry.date });
+    if (session) existingQuery.session(session);
+    const existing = await existingQuery.lean();
+    if (existing) {
+      throw new ValidationError('An entry for this date already exists');
+    }
     const [createdEntry] = await Entry.create([{ ...sanitizedEntry, userId }], session ? { session } : undefined);
     await writeAuditEvent({
       userId,
@@ -90,6 +97,15 @@ export async function updateEntry(userId, id, body = {}) {
         status: 409,
         body: toConflictResponse(current.toObject(), resolution),
       };
+    }
+
+    if (resolution.entry.date !== current.date) {
+      const duplicateQuery = Entry.findOne({ userId, date: resolution.entry.date, id: { $ne: id } });
+      if (session) duplicateQuery.session(session);
+      const duplicateDateEntry = await duplicateQuery.lean();
+      if (duplicateDateEntry) {
+        throw new ValidationError('An entry for this date already exists');
+      }
     }
 
     current.set(resolution.entry);

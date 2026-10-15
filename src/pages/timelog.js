@@ -131,8 +131,14 @@ function deriveDraftFields(draft) {
   };
 }
 
-function getDraftWarning(draft) {
+function getDraftWarning(draft, editingId = null) {
   if (!draft.date) return 'Date is required.';
+
+  const existingEntry = store.getEntryByDate(draft.date);
+  if (existingEntry && existingEntry.id !== editingId) {
+    return 'An entry for this date already exists.';
+  }
+
   if (!draft.isPresent) return '';
   if (!draft.amTimeIn && !draft.pmTimeIn) return 'At least one time in is required.';
 
@@ -144,16 +150,20 @@ function getDraftWarning(draft) {
   const pmOut = parseTimeStrict(draft.pmTimeOut);
   if (pmIn != null && pmOut != null && pmIn >= pmOut) return 'PM Out must be after PM In.';
 
+  if (amIn != null && pmIn != null && amIn >= pmIn) return 'PM In must be after AM In.';
+  if (amOut != null && pmIn != null && amOut > pmIn) return 'PM In cannot be before AM Out.';
+  if (amOut != null && pmOut != null && amOut >= pmOut) return 'PM Out must be after AM Out.';
+
   return '';
 }
 
-function renderDraftPreview() {
+function renderDraftPreview(editingId = null) {
   const preview = document.getElementById('entry-derived-preview');
   if (!preview) return;
 
   const draft = readEntryDraft();
   const derived = deriveDraftFields(draft);
-  const warning = getDraftWarning(draft);
+  const warning = getDraftWarning(draft, editingId);
 
   // textContent for the message: it is the only place a warning could carry
   // user input into innerHTML.
@@ -224,16 +234,18 @@ function showConflictModal(entryId, { conflicts = [], allowDeleteLatest = false 
 
 function openEntryEditor(entry) {
   if (entry === null) return;
+  const editingId = entry?.id || null;
   openModal(entryForm(entry));
-  document.getElementById('entry-save').onclick = () => saveEntry(entry?.id || null);
+  document.getElementById('entry-save').onclick = () => saveEntry(editingId);
   document.querySelector('.modal-close-btn').onclick = closeModal;
   document.querySelector('.modal-cancel-btn').onclick = closeModal;
+  const updatePreview = () => renderDraftPreview(editingId);
   DRAFT_FIELD_IDS.forEach(id => {
     const field = document.getElementById(id);
-    field?.addEventListener('input', renderDraftPreview);
-    field?.addEventListener('change', renderDraftPreview);
+    field?.addEventListener('input', updatePreview);
+    field?.addEventListener('change', updatePreview);
   });
-  renderDraftPreview();
+  renderDraftPreview(editingId);
 }
 
 function toggleSelectedDate(date, checked) {
@@ -303,7 +315,7 @@ function openTemplateManager() {
 
 async function saveEntry(id = null) {
   const draft = readEntryDraft();
-  const warning = getDraftWarning(draft);
+  const warning = getDraftWarning(draft, id);
 
   if (warning) {
     toast(warning.replace(/\.$/, ''), 'error');
