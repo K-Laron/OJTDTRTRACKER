@@ -716,6 +716,12 @@ class Store {
     return this.derivedStatusCache;
   }
 
+  async fetchAuditEvents({ limit = 50 } = {}) {
+    return this._request(`/audit?limit=${encodeURIComponent(limit)}`, {
+      headers: this.getAuthHeaders(),
+    }, { logoutOn401: true });
+  }
+
   async fetchEntries({ dateFrom, dateTo, page, limit } = {}) {
     const params = new URLSearchParams();
     if (dateFrom) params.set('date_from', dateFrom);
