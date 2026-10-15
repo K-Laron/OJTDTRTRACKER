@@ -1,6 +1,7 @@
 import { store } from '../store.js';
 import { toast, confirmDialog, openModal, closeModal, fmtDate, getCurrentDate, ICONS } from '../utils.js';
 import { buildJsonExportFilename } from '../lib/export-filenames.js';
+import { switchThemeWithTransition } from '../lib/theme-transition.js';
 
 function renderImportPreview(summary) {
   const diff = summary.diff || {};
@@ -169,16 +170,30 @@ export function mount() {
     }
   });
   // Theme
-  document.getElementById('theme-dark')?.addEventListener('click', async () => {
+  document.getElementById('theme-dark')?.addEventListener('click', async (event) => {
     try {
-      await store.setTheme('dark');
+      await switchThemeWithTransition(store, 'dark', event, () => {
+        const darkBtn = document.getElementById('theme-dark');
+        const lightBtn = document.getElementById('theme-light');
+        if (darkBtn && lightBtn) {
+          darkBtn.className = 'btn btn-primary';
+          lightBtn.className = 'btn btn-secondary';
+        }
+      });
     } catch (err) {
       toast(err.message || 'Failed to update theme', 'error');
     }
   });
-  document.getElementById('theme-light')?.addEventListener('click', async () => {
+  document.getElementById('theme-light')?.addEventListener('click', async (event) => {
     try {
-      await store.setTheme('light');
+      await switchThemeWithTransition(store, 'light', event, () => {
+        const darkBtn = document.getElementById('theme-dark');
+        const lightBtn = document.getElementById('theme-light');
+        if (darkBtn && lightBtn) {
+          darkBtn.className = 'btn btn-secondary';
+          lightBtn.className = 'btn btn-primary';
+        }
+      });
     } catch (err) {
       toast(err.message || 'Failed to update theme', 'error');
     }

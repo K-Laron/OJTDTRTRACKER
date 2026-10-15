@@ -3,6 +3,7 @@ import { router } from './router.js';
 import { store } from './store.js';
 import { ICONS, getCurrentDate, requestRender, toast } from './utils.js';
 import { buildJsonExportFilename } from './lib/export-filenames.js';
+import { switchThemeWithTransition } from './lib/theme-transition.js';
 
 // Page modules are code-split and loaded on demand
 
@@ -143,9 +144,12 @@ function ensureShell() {
 
 function bindShellEvents() {
   if (shellBound) return;
-  document.getElementById('theme-toggle')?.addEventListener('click', async () => {
+  document.getElementById('theme-toggle')?.addEventListener('click', async (event) => {
     try {
-      await store.setTheme(store.state.theme === 'dark' ? 'light' : 'dark');
+      const nextTheme = store.state.theme === 'dark' ? 'light' : 'dark';
+      await switchThemeWithTransition(store, nextTheme, event, () => {
+        updateShellChrome(router.getCurrentPath?.() || window.location.hash.slice(1) || '/');
+      });
     } catch (err) {
       toast(err.message || 'Failed to update theme', 'error');
     }

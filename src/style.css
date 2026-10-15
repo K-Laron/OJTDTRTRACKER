@@ -1038,7 +1038,29 @@ input[type="checkbox"] {
   justify-content: center;
 }
 .theme-toggle:hover { background: rgba(255,255,255,0.04); color: var(--text); }
+.theme-toggle:active { transform: scale(0.97); }
 .theme-toggle svg { width: 16px; height: 16px; }
+
+/* ========== CIRCULAR VIEW TRANSITIONS ========== */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+::view-transition-old(root) {
+  z-index: 1;
+}
+::view-transition-new(root) {
+  z-index: 9999;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(root),
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none !important;
+  }
+}
 
 /* ========== WEEKLY PROGRESS BAR ========== */
 .week-progress { height: 8px; background: rgba(255,255,255,0.06); border-radius: 4px; overflow: hidden; width: 100%; }
