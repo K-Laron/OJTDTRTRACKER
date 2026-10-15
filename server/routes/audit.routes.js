@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/require-auth.js';
 import { readAuditEvents } from '../services/audit.service.js';
+import { sendErrorResponse } from './errors.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -11,8 +12,7 @@ router.get('/', async (req, res) => {
     const events = await readAuditEvents(req.userId, limit);
     res.json(events);
   } catch (err) {
-    console.error('Fetch audit log error:', err);
-    res.status(500).json({ error: 'Failed to fetch audit log' });
+    sendErrorResponse(res, err, 'Failed to fetch audit log', 'Fetch audit log error:');
   }
 });
 

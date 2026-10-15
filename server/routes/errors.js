@@ -13,3 +13,11 @@ export function getErrorStatus(err) {
   if (err?.name === 'ValidationError') return 400;
   return 500;
 }
+
+export function sendErrorResponse(res, err, fallbackMessage = 'Internal server error', logPrefix = 'Error:') {
+  const status = getErrorStatus(err);
+  if (status >= 500) {
+    console.error(logPrefix, err);
+  }
+  return res.status(status).json({ error: err?.message || fallbackMessage });
+}
