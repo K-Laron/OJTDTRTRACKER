@@ -250,8 +250,15 @@ async function renderPage(path) {
   currentPageModule = pageModule;
 }
 
+function isUserEditing() {
+  const active = document.activeElement;
+  if (!active) return false;
+  const tag = active.tagName;
+  return (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') && !active.readOnly;
+}
+
 function scheduleActiveRouteRender() {
-  if (document.querySelector('.modal-overlay')) {
+  if (document.querySelector('.modal-overlay') || isUserEditing()) {
     pendingRouteRender = true;
     return;
   }
@@ -374,6 +381,16 @@ document.addEventListener('modal-closed', () => {
   if (!pendingRouteRender) return;
   pendingRouteRender = false;
   queueActiveRouteRender();
+});
+
+document.addEventListener('focusout', () => {
+  if (!pendingRouteRender) return;
+  setTimeout(() => {
+    if (pendingRouteRender && !isUserEditing() && !document.querySelector('.modal-overlay')) {
+      pendingRouteRender = false;
+      queueActiveRouteRender();
+    }
+  }, 50);
 });
 
 document.addEventListener('render-auth', () => {
