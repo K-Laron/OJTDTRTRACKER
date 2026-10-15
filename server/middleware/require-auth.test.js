@@ -1,6 +1,6 @@
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { requireAuth } from './require-auth.js';
+import { requireAuth, isAuthTokenExpired } from './require-auth.js';
 import { User } from '../models.js';
 import { hashAuthToken } from '../services/auth-token.js';
 
@@ -114,6 +114,42 @@ test('requireAuth forwards unexpected database errors to next', async () => {
   try {
     await requireAuth(req, res, (err) => { caughtError = err; });
     assert.equal(caughtError, dbError);
+  } finally {
+    findMock.mock.restore();
+  }
+});
+
+test('isAuthTokenExpired detects tokens past the 30-day window', () => {
+  const now = Date.now();
+  const twentyDaysAgo = new Date(now - 20 * 24 * 60 * 60 * 1000);
+  const thirtyOneDaysAgo = new Date(now - 31 * 24 * 60 * 60 * 1000);
+
+  assert.equal(isAuthTokenExpired(twentyDaysAgo, now), false);
+  assert.equal(isAuthTokenExpired(thirtyOneDaysAgo, now), true);
+  assert.equal(isAuthTokenExpired(null, now), false);
+  assert.equal(isAuthTokenExpired('invalid-date', now), false);
+});
+
+test('requireAuth rejects expired session tokens with 401 Session expired', async () => {
+  const token = 'expired-token-123';
+  const thirtyOneDaysAgo = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+  const findMock = mock.method(User, 'findById', (id) => ({
+    lean: async () => ({
+      _id: id,
+      authTokenHash: hashAuthToken(token),
+      authTokenCreatedAt: thirtyOneDaysAgo,
+    }),
+  }));
+
+  const req = { headers: { 'x-user-id': 'user789', 'x-auth-token': token } };
+  const res = createMockRes();
+  let nextCalled = false;
+
+  try {
+    await requireAuth(req, res, () => { nextCalled = true; });
+    assert.equal(res.statusCode, 401);
+    assert.deepEqual(res.payload, { error: 'Session expired' });
+    assert.equal(nextCalled, false);
   } finally {
     findMock.mock.restore();
   }
