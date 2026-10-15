@@ -12,6 +12,7 @@ const app = document.getElementById('app');
 const ICON_CALENDAR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>';
 const ICON_SUN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>';
 const ICON_MOON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
+const ICON_SIDEBAR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>';
 
 const navItems = [
   { path: '/', label: 'Dashboard', icon: ICONS.dashboard },
@@ -106,22 +107,33 @@ function renderLoadingState() {
 }
 
 function renderShell() {
+  const isCollapsed = localStorage.getItem('ojt_sidebar_collapsed') === 'true';
   return `
-    <div id="app-shell">
+    <div id="app-shell" class="${isCollapsed ? 'sidebar-collapsed' : ''}">
       <aside class="sidebar" id="sidebar">
         <div class="sidebar-brand">
-          <div class="brand-icon">${ICONS.clock}</div>
-          <div class="brand-text"><h1>DTR Tracker</h1><span>OJT Time Record</span></div>
+          <div class="brand-main">
+            <div class="brand-icon">${ICONS.clock}</div>
+            <div class="brand-text"><h1>DTR Tracker</h1><span>OJT Time Record</span></div>
+          </div>
+          <button class="sidebar-toggle-btn" id="btn-toggle-sidebar" title="Toggle Sidebar" aria-label="Toggle Sidebar">
+            ${ICON_SIDEBAR}
+          </button>
         </div>
         <nav class="sidebar-nav">
-          ${navItems.map(item => `<a href="#${item.path}" class="nav-item" data-nav-path="${item.path}">${item.icon} ${item.label}</a>`).join('')}
+          ${navItems.map(item => `
+            <a href="#${item.path}" class="nav-item" data-nav-path="${item.path}" title="${item.label}">
+              ${item.icon}
+              <span class="nav-item-label">${item.label}</span>
+            </a>
+          `).join('')}
         </nav>
         <div class="sidebar-footer">
-          <div style="font-size:0.8rem; color:var(--text-muted); padding-bottom:12px; border-bottom:1px solid var(--border); margin-bottom:12px;">
-            Logged in as <b id="sidebar-username" style="color:var(--text)"></b>
-            <a href="#" id="btn-logout" style="color:var(--primary); text-decoration:none; float:right;">Logout</a>
+          <div class="sidebar-user-block">
+            <span>Logged in as <b id="sidebar-username" style="color:var(--text)"></b></span>
+            <a href="#" id="btn-logout" style="color:var(--primary); text-decoration:none;">Logout</a>
           </div>
-          <button class="theme-toggle" id="theme-toggle"></button>
+          <button class="theme-toggle" id="theme-toggle" title="Switch Theme"></button>
           <div class="progress-mini" style="margin-top:12px">
             <div class="progress-mini-bar" id="sidebar-progress-bar"></div>
           </div>
@@ -155,6 +167,15 @@ function bindShellEvents() {
     }
   });
 
+  document.getElementById('btn-toggle-sidebar')?.addEventListener('click', () => {
+    const shell = document.getElementById('app-shell');
+    if (!shell) return;
+    const isCollapsed = shell.classList.toggle('sidebar-collapsed');
+    try {
+      localStorage.setItem('ojt_sidebar_collapsed', String(isCollapsed));
+    } catch {}
+  });
+
   document.getElementById('btn-logout')?.addEventListener('click', (e) => {
     e.preventDefault();
     store.logout();
@@ -176,7 +197,7 @@ function updateShellChrome(activePath) {
 
   const themeToggleEl = document.getElementById('theme-toggle');
   if (themeToggleEl) {
-    themeToggleEl.innerHTML = `${theme === 'dark' ? ICON_SUN : ICON_MOON} ${theme === 'dark' ? 'Light Mode' : 'Dark Mode'}`;
+    themeToggleEl.innerHTML = `${theme === 'dark' ? ICON_SUN : ICON_MOON} <span>${theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>`;
   }
 
   const progressBarEl = document.getElementById('sidebar-progress-bar');
