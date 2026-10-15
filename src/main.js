@@ -401,8 +401,23 @@ document.addEventListener('render-auth', () => {
   if (!store.userId) void renderPage(getActivePath());
 });
 
-if ('serviceWorker' in navigator && location.hostname !== 'localhost') {
+if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').catch(() => {});
 }
+
+window.addEventListener('offline', () => {
+  let banner = document.getElementById('offline-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'offline-banner';
+    banner.className = 'offline-banner';
+    banner.textContent = 'Offline Mode: Viewing cached data';
+    document.body.prepend(banner);
+  }
+});
+window.addEventListener('online', () => {
+  const banner = document.getElementById('offline-banner');
+  if (banner) banner.remove();
+});
 
 router.resolve();

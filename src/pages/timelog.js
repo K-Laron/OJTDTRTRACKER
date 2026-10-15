@@ -6,6 +6,7 @@ import {
   fmtDate,
   getDayName,
   getCurrentDate,
+  getCurrentTime,
   getDaysInMonth,
   toast,
   openModal,
@@ -567,6 +568,67 @@ function bindTimelogEvents(root) {
     const target = event.target instanceof Element ? event.target : null;
     if (!target) return;
 
+    const quickClockBtn = target.closest('#btn-quick-clock');
+    if (quickClockBtn) {
+      const today = getCurrentDate(), now = getCurrentTime();
+      const schedule = getScheduledWorkWindow(today, store.state.settings);
+      const { phase, entry } = store.getClockPhase(today);
+      if (phase === 0) {
+        store.addEntry({
+          date: today,
+          status: 'present',
+          amTimeIn: now,
+          amTimeOut: '',
+          pmTimeIn: '',
+          pmTimeOut: '',
+          hoursRendered: 0,
+          overtimeHours: 0,
+          lateMinutes: calculateLate(now, schedule.expectedTimeIn),
+          undertimeMinutes: 0,
+          remarks: '',
+          activities: '',
+        })
+          .then(() => {
+            toast('AM Clocked In!', 'success');
+            refreshTimelog(root);
+          })
+          .catch(err => toast(err.message || 'Failed to clock in', 'error'));
+      } else if (phase === 1) {
+        const hrs = calculateEntryHours({ ...entry, amTimeOut: now });
+        store.updateEntry(entry.id, {
+          amTimeOut: now,
+          hoursRendered: hrs,
+          overtimeHours: calculateOvertimeForDate(today, hrs),
+        })
+          .then(() => {
+            toast('AM Clocked Out!', 'success');
+            refreshTimelog(root);
+          })
+          .catch(err => toast(err.message || 'Failed to clock out', 'error'));
+      } else if (phase === 2) {
+        store.updateEntry(entry.id, { pmTimeIn: now })
+          .then(() => {
+            toast('PM Clocked In!', 'success');
+            refreshTimelog(root);
+          })
+          .catch(err => toast(err.message || 'Failed to clock in', 'error'));
+      } else if (phase === 3) {
+        const hrs = calculateEntryHours({ ...entry, pmTimeOut: now });
+        store.updateEntry(entry.id, {
+          pmTimeOut: now,
+          hoursRendered: hrs,
+          overtimeHours: calculateOvertimeForDate(today, hrs),
+          undertimeMinutes: calculateUndertime(now, schedule.expectedTimeOut),
+        })
+          .then(() => {
+            toast('PM Clocked Out! ' + fmtHours(hrs) + ' recorded.', 'success');
+            refreshTimelog(root);
+          })
+          .catch(err => toast(err.message || 'Failed to clock out', 'error'));
+      }
+      return;
+    }
+
     const addButton = target.closest('#btn-add-entry');
     if (addButton) {
       openEntryEditor();
@@ -714,11 +776,23 @@ function bindTimelogEvents(root) {
 }
 
 export function render() {
+  const today = getCurrentDate();
+  const { phase } = store.getClockPhase(today);
+  const phaseLabels = {
+    0: { label: "AM Clock In", btnClass: "btn-primary", icon: ICONS.clock },
+    1: { label: "AM Clock Out", btnClass: "btn-danger", icon: ICONS.clock },
+    2: { label: "PM Clock In", btnClass: "btn-primary", icon: ICONS.clock },
+    3: { label: "PM Clock Out", btnClass: "btn-danger", icon: ICONS.clock },
+    4: { label: "Done Today", btnClass: "btn-success", icon: ICONS.check },
+  };
+  const p = phaseLabels[phase];
+
   return `
     <div id="timelog-page">
       <div class="page-header">
         <div><h2>Time Log</h2><p>Manage your daily time records</p></div>
-        <div class="page-actions">
+        <div class="page-actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          ${phase < 4 ? `<button class="btn ${p.btnClass}" id="btn-quick-clock">${p.icon} ${p.label}</button>` : `<span class="badge badge-success" style="padding:7px 12px;font-size:0.85rem">${ICONS.check} Done Today</span>`}
           <button class="btn btn-secondary" id="btn-template-manager-header">Templates</button>
           <button class="btn btn-primary" id="btn-add-entry">${ICONS.plus} Add Entry</button>
         </div>

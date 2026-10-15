@@ -107,7 +107,10 @@ export function render() {
         <div class="form-group"><label>Clock-In Reminder</label><input type="time" id="set-notif-in" value="${s.clockInReminder}" ${!s.notificationsEnabled ? 'disabled' : ''}></div>
         <div class="form-group"><label>Clock-Out Reminder</label><input type="time" id="set-notif-out" value="${s.clockOutReminder}" ${!s.notificationsEnabled ? 'disabled' : ''}></div>
       </div>
-      <div class="mt-4"><button class="btn btn-primary" id="btn-save-notif">${ICONS.check} Save Notification Settings</button></div>
+      <div class="mt-4 flex gap-3" style="flex-wrap:wrap">
+        <button class="btn btn-primary" id="btn-save-notif">${ICONS.check} Save Notification Settings</button>
+        <button class="btn btn-secondary" id="btn-test-notif">Test Notification</button>
+      </div>
     </div>
 
     <!-- Auto-backup -->
@@ -122,6 +125,30 @@ export function render() {
       </div>
       <p class="text-muted" style="font-size:0.85rem">${s.lastBackupDate ? `Last backup: ${new Date(s.lastBackupDate).toLocaleDateString()}` : 'No backups yet'}</p>
       <div class="mt-4"><button class="btn btn-primary" id="btn-save-backup">${ICONS.check} Save</button></div>
+    </div>
+
+    <!-- Account & Security -->
+    <div class="card mb-6">
+      <div class="card-header"><h3>Account & Security</h3></div>
+      <div class="form-group mb-4">
+        <label>Logged-in Account</label>
+        <input type="text" value="${store.username || 'User'}" disabled style="opacity:0.75">
+      </div>
+      <div class="form-group mb-3">
+        <label>Current Password</label>
+        <input type="password" id="set-cur-pass" placeholder="Enter current password">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>New Password</label>
+          <input type="password" id="set-new-pass" placeholder="Min. 8 characters">
+        </div>
+        <div class="form-group">
+          <label>Confirm New Password</label>
+          <input type="password" id="set-conf-pass" placeholder="Repeat new password">
+        </div>
+      </div>
+      <div class="mt-4"><button class="btn btn-primary" id="btn-change-password">${ICONS.check} Change Password</button></div>
     </div>
 
     <!-- Data Management -->
@@ -206,11 +233,63 @@ export function mount() {
   document.getElementById('btn-save-notif')?.addEventListener('click', async () => {
     try {
       const enabled = document.getElementById('set-notif').checked;
-      if (enabled && 'Notification' in window && Notification.permission !== 'granted') Notification.requestPermission();
+      if (enabled && 'Notification' in window && Notification.permission !== 'granted') {
+        const perm = await Notification.requestPermission();
+        if (perm !== 'granted') {
+          toast('Notification permission was not granted by browser', 'warning');
+        }
+      }
       await store.updateSettings({ notificationsEnabled: enabled, clockInReminder: document.getElementById('set-notif-in').value, clockOutReminder: document.getElementById('set-notif-out').value });
       toast('Notification settings saved!', 'success');
     } catch (err) {
       toast(err.message || 'Failed to save notification settings', 'error');
+    }
+  });
+  document.getElementById('btn-test-notif')?.addEventListener('click', async () => {
+    if (!('Notification' in window)) {
+      toast('Notifications are not supported in this browser', 'warning');
+      return;
+    }
+    let perm = Notification.permission;
+    if (perm !== 'granted') {
+      perm = await Notification.requestPermission();
+    }
+    if (perm === 'granted') {
+      new Notification('DTR Tracker', { body: 'Notification test successful!', icon: '/favicon.svg' });
+      toast('Test notification sent!', 'success');
+    } else {
+      toast('Notifications blocked in browser permissions', 'error');
+    }
+  });
+  document.getElementById('btn-change-password')?.addEventListener('click', async () => {
+    const curEl = document.getElementById('set-cur-pass');
+    const newEl = document.getElementById('set-new-pass');
+    const confEl = document.getElementById('set-conf-pass');
+    const currentPassword = curEl.value;
+    const newPassword = newEl.value;
+    const confirmPassword = confEl.value;
+
+    if (!currentPassword || !newPassword) {
+      toast('Please enter current and new password', 'error');
+      return;
+    }
+    if (newPassword.length < 8) {
+      toast('New password must be at least 8 characters', 'error');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast('New passwords do not match', 'error');
+      return;
+    }
+
+    try {
+      await store.changePassword(currentPassword, newPassword);
+      curEl.value = '';
+      newEl.value = '';
+      confEl.value = '';
+      toast('Password updated successfully!', 'success');
+    } catch (err) {
+      toast(err.message || 'Failed to change password', 'error');
     }
   });
   // Auto-backup

@@ -31,6 +31,9 @@ const entrySchema = new mongoose.Schema({
   undertimeMinutes: Number,
   remarks: String,
   activities: String,
+  verified: { type: Boolean, default: false },
+  verifiedBy: { type: String, default: "" },
+  verifiedAt: { type: String, default: "" },
   createdAt: { type: Date, default: Date.now }
 });
 
@@ -66,7 +69,8 @@ const configSchema = new mongoose.Schema({
     clockOutReminder: String,
     timeFormat: String
   },
-  theme: String
+  theme: String,
+  signOffs: { type: mongoose.Schema.Types.Mixed, default: {} }
 });
 
 const auditEventSchema = new mongoose.Schema({
@@ -82,7 +86,7 @@ const auditEventSchema = new mongoose.Schema({
   ts: { type: Date, default: Date.now, index: true, expires: '730d' },
 });
 
-entrySchema.index({ userId: 1, date: -1 });
+entrySchema.index({ userId: 1, date: 1 }, { unique: true });
 entrySchema.index({ userId: 1, id: 1 }, { unique: true });
 holidaySchema.index({ userId: 1, date: 1 }, { unique: true });
 auditEventSchema.index({ userId: 1, ts: -1, _id: -1 });

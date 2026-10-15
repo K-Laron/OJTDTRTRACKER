@@ -1,3 +1,4 @@
+import { signOffMonth, retractMonthSignOff, getMonthSignOff } from './lib/store-signoff.js';
 import { getScheduledNonWorkingStatus, isScheduledWorkday } from '../shared/work-schedule.js';
 import { toLocalDateString } from '../shared/time.js';
 import { request as apiRequest } from './api/client.js';
@@ -68,6 +69,7 @@ const DEFAULT_STATE = {
   entries: [],
   holidays: [],
   theme: 'dark',
+  signOffs: {},
 };
 
 const API_BASE = '/api';
@@ -286,6 +288,7 @@ class Store {
     if (resources.includes('config') && config) {
       this.state.profile = { ...DEFAULT_STATE.profile, ...config.profile };
       this.state.settings = { ...DEFAULT_STATE.settings, ...config.settings };
+      this.state.signOffs = config.signOffs || {};
       const oldTheme = this.state.theme;
       this.state.theme = config.theme || 'dark';
       if (oldTheme !== this.state.theme) {
@@ -368,7 +371,15 @@ class Store {
     this._setAuth(data.userId, data.username, data.authToken);
   }
 
-  async register(username, password) {
+  async changePassword(currentPassword, newPassword) {
+    return this._request("/auth/change-password", {
+      method: "POST",
+      headers: { ...this.getAuthHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+  }
+
+    async register(username, password) {
     const data = await this._request('/auth/register', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
@@ -642,7 +653,8 @@ class Store {
       body: JSON.stringify({ 
         profile: this.state.profile, 
         settings: this.state.settings, 
-        theme: this.state.theme 
+        theme: this.state.theme,
+        signOffs: this.state.signOffs || {}
       })
     }, { logoutOn401: true }).catch(err => {
       this._consumeLocalSyncSkip();
@@ -651,6 +663,7 @@ class Store {
     this.state.profile = { ...DEFAULT_STATE.profile, ...savedConfig.profile };
     this.state.settings = { ...DEFAULT_STATE.settings, ...savedConfig.settings };
     this.state.theme = savedConfig.theme || 'dark';
+    this.state.signOffs = savedConfig.signOffs || {};
     document.body.className = this.state.theme === 'light' ? 'light-theme' : '';
 
     await this.refreshHolidays([], { force: true }).catch(err => {
@@ -662,7 +675,20 @@ class Store {
     this._notify({ resources: ['config'] });
   }
 
-  // --- Holidays ---
+  // --- Sign-Offs ---
+  async signOffMonth(monthKey, supervisor, remarks = '') {
+    return signOffMonth(this, monthKey, supervisor, remarks);
+  }
+
+  async retractMonthSignOff(monthKey) {
+    return retractMonthSignOff(this, monthKey);
+  }
+
+  getMonthSignOff(monthKey) {
+    return getMonthSignOff(this, monthKey);
+  }
+
+    // --- Holidays ---
   async fetchHolidays(years = []) {
     const normalizedYears = [...new Set((Array.isArray(years) ? years : [])
       .map(year => Number.parseInt(year, 10))
@@ -731,37 +757,11 @@ class Store {
   }
 
   async restoreHoliday(snapshot) {
-    if (!snapshot?.date) throw new Error('Missing holiday snapshot');
-    this._queueLocalSyncSkip();
-    const restored = await this._request(`/holidays/${snapshot.date}`, {
-      method: 'PUT',
-      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify(snapshot)
-    }, { logoutOn401: true }).catch(err => {
-      this._consumeLocalSyncSkip();
-      throw err;
-    });
-
-    const index = this.state.holidays.findIndex(holiday => holiday.date === restored.date);
-    if (index === -1) this.state.holidays.push(restored);
-    else this.state.holidays[index] = restored;
-    this._markResourcesChanged(['holidays']);
-    this._notify({ resources: ['holidays'] });
-    return restored;
+    return restoreHoliday(this, snapshot);
   }
 
   async restoreConfig(snapshot) {
-    if (!snapshot) throw new Error('Missing config snapshot');
-    this._queueLocalSyncSkip();
-    await this._request('/config', {
-      method: 'PUT',
-      headers: this.getAuthHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify(snapshot)
-    }, { logoutOn401: true }).catch(err => {
-      this._consumeLocalSyncSkip();
-      throw err;
-    });
-    await this.init();
+    return restoreConfig(this, snapshot);
   }
 
   getHolidaysInMonth(y, m) {

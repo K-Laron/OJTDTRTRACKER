@@ -1,6 +1,9 @@
 const LEGACY_INDEXES = [
   // entries: old global unique id_1 replaced by compound { userId: 1, id: 1 }
   { collection: 'entries', name: 'id_1', dropWhen: () => true },
+  // entries: old non-unique userId_1_date_-1 or userId_1_date_1 replaced by unique compound
+  { collection: 'entries', name: 'userId_1_date_-1', dropWhen: (existing) => !existing.unique },
+  { collection: 'entries', name: 'userId_1_date_1', dropWhen: (existing) => !existing.unique },
   // holidays: old non-unique userId_1_date_1 replaced by unique compound
   { collection: 'holidays', name: 'userId_1_date_1', dropWhen: (existing) => !existing.unique },
   // auditevents: old non-TTL ts_1 replaced by 730-day TTL (Mongoose pluralizes

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createAuthToken, hashAuthToken, verifyAuthToken } from './auth-token.js';
-import { normalizeUsername, validateAuthInput } from './auth.service.js';
+import { normalizeUsername, validateAuthInput, changePassword } from './auth.service.js';
 
 test('auth tokens verify only against their own hash', () => {
   const token = createAuthToken();
@@ -41,5 +41,16 @@ test('validateAuthInput lets login accept stored legacy passwords', () => {
   assert.throws(
     () => validateAuthInput({ username: 'kenneth', password: 'x'.repeat(129) }, { enforcePasswordPolicy: false }),
     /128 characters or fewer/,
+  );
+});
+
+test('changePassword rejects empty or short passwords', async () => {
+  await assert.rejects(
+    () => changePassword('user123', { currentPassword: '', newPassword: '' }),
+    /Current password and new password are required/,
+  );
+  await assert.rejects(
+    () => changePassword('user123', { currentPassword: 'oldpass123', newPassword: 'short' }),
+    /Password must be 8 to 128 characters/,
   );
 });

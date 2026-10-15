@@ -23,13 +23,13 @@ function stubDb(indexesByCollection) {
   };
 }
 
-test('migrateIndexes drops legacy entries id_1 and non-unique holiday index', async () => {
+test('migrateIndexes drops legacy entries id_1, non-unique entries date index, and non-unique holiday index', async () => {
   const db = stubDb({
-    entries: [{ name: 'id_1', unique: true }],
+    entries: [{ name: 'id_1', unique: true }, { name: 'userId_1_date_-1', unique: false }],
     holidays: [{ name: 'userId_1_date_1', unique: false }],
   });
   await migrateIndexes(db);
-  assert.deepEqual(db.dropped, ['entries.id_1', 'holidays.userId_1_date_1']);
+  assert.deepEqual(db.dropped, ['entries.id_1', 'entries.userId_1_date_-1', 'holidays.userId_1_date_1']);
 });
 
 test('migrateIndexes keeps an already unique holiday index', async () => {

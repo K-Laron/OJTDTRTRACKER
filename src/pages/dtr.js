@@ -1,6 +1,6 @@
 import { store } from '../store.js';
 import { ensureYearHolidays } from './holiday-refresh.js';
-import { MONTHS, ICONS, getDaysInMonth, requestRender, formatOvertimeDuration } from '../utils.js';
+import { MONTHS, ICONS, getDaysInMonth, requestRender, formatOvertimeDuration, openModal, closeModal, confirmDialog, toast } from '../utils.js';
 import { buildDtrSheetModel } from '../lib/dtr-sheet-model.js';
 
 let selYear = new Date().getFullYear();
@@ -78,12 +78,15 @@ async function loadMonthEntries(force = false) {
 }
 
 function renderHeader() {
+  const monthKey = `${selYear}-${String(selMonth + 1).padStart(2, "0")}`;
+  const signOff = store.getMonthSignOff(monthKey);
   return `
     <div class="page-header">
       <div><h2>DTR Sheet</h2><p>Daily Time Record - ${MONTHS[selMonth]} ${selYear}</p></div>
       <div class="page-actions no-print">
         <button class="btn btn-secondary" id="btn-prev-month">&larr; Prev</button>
         <button class="btn btn-secondary" id="btn-next-month">Next &rarr;</button>
+        <button class="btn ${signOff ? "btn-success" : "btn-secondary"}" id="btn-signoff-month">${ICONS.check} ${signOff ? "Signed Off" : "Supervisor Sign-Off"}</button>
         <button class="btn btn-secondary" id="btn-print-dtr">${ICONS.printer} Print</button>
         <button class="btn btn-primary" id="btn-export-pdf">${ICONS.download} PDF</button>
         <button class="btn btn-success" id="btn-export-excel">${ICONS.download} Excel</button>
@@ -102,6 +105,8 @@ function renderSheetContent() {
     settings: store.state.settings,
     getEntryStatus: entry => store.getEntryStatus(entry),
   });
+  const monthKey = `${selYear}-${String(selMonth + 1).padStart(2, "0")}`;
+  const signOff = store.getMonthSignOff(monthKey);
   const profile = sheet.profile;
   const hours = (value) => value.toFixed(2);
 
@@ -172,14 +177,27 @@ function renderSheetContent() {
         record of which was made daily at the time of arrival and departure from office.
       </div>
 
+      ${signOff ? `
+      <div class="dtr-verification-badge mb-4" style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.3);border-radius:8px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="color:#06d6a0;display:inline-flex">${ICONS.check}</span>
+          <div>
+            <div style="font-weight:700;color:#06d6a0;font-size:0.95rem">OFFICIALLY SIGNED OFF & VERIFIED</div>
+            <div style="font-size:0.85rem;color:var(--text-muted)">Verified by <strong>${signOff.supervisor}</strong> on ${new Date(signOff.signedAt).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" })}</div>
+            ${signOff.remarks ? `<div style="font-size:0.8rem;color:var(--text-secondary);margin-top:2px"><em>Remarks: ${signOff.remarks}</em></div>` : ""}
+          </div>
+        </div>
+        <button class="btn btn-ghost btn-sm no-print" id="btn-retract-signoff" style="color:var(--text-muted)">Retract</button>
+      </div>` : ""}
+
       <div class="dtr-footer">
         <div class="dtr-signature">
           <div class="sig-line">${profile.name || '_______________'}</div>
           <div class="sig-label">Trainee's Signature</div>
         </div>
         <div class="dtr-signature">
-          <div class="sig-line">${profile.supervisor || '_______________'}</div>
-          <div class="sig-label">Verified By (Supervisor)</div>
+          <div class="sig-line">${signOff ? signOff.supervisor : (profile.supervisor || '_______________')}</div>
+          <div class="sig-label">Verified By (Supervisor)${signOff ? ` • Signed ${new Date(signOff.signedAt).toLocaleDateString()}` : ""}</div>
         </div>
       </div>
     </div>
@@ -237,7 +255,67 @@ function bindDtrEvents(root) {
       return;
     }
 
-    const printButton = target.closest('#btn-print-dtr');
+    const signOffButton = target.closest('#btn-signoff-month');
+    if (signOffButton) {
+      const monthKey = `${selYear}-${String(selMonth + 1).padStart(2, "0")}`;
+      const existing = store.getMonthSignOff(monthKey);
+      openModal(`
+        <div class="modal-header"><h3>Supervisor Sign-Off</h3><button class="btn-icon modal-close-btn">${ICONS.x}</button></div>
+        <div class="modal-body">
+          <p style="font-size:0.9rem;color:var(--text-secondary);margin-bottom:1rem">
+            Record supervisor verification for ${MONTHS[selMonth]} ${selYear}. This marks the monthly report as officially reviewed and approved.
+          </p>
+          <div class="form-group mb-3">
+            <label>Supervisor Name</label>
+            <input type="text" id="signoff-supervisor" value="${existing?.supervisor || store.state.profile.supervisor || ''}" placeholder="Supervisor name">
+          </div>
+          <div class="form-group mb-3">
+            <label>Approval Notes / Remarks (Optional)</label>
+            <textarea id="signoff-remarks" rows="2" placeholder="e.g. Completed all allocated department deliverables.">${existing?.remarks || ''}</textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost modal-cancel-btn">Cancel</button>
+          <button class="btn btn-primary" id="btn-confirm-signoff">${ICONS.check} Approve & Sign Off</button>
+        </div>
+      `);
+      document.querySelector(".modal-close-btn").onclick = closeModal;
+      document.querySelector(".modal-cancel-btn").onclick = closeModal;
+      document.getElementById("btn-confirm-signoff").onclick = async () => {
+        const supervisor = document.getElementById("signoff-supervisor").value.trim();
+        const remarks = document.getElementById("signoff-remarks").value.trim();
+        if (!supervisor) {
+          toast("Please enter the supervisor name", "error");
+          return;
+        }
+        try {
+          await store.signOffMonth(monthKey, supervisor, remarks);
+          closeModal();
+          toast("Monthly DTR officially signed off!", "success");
+          refreshDtr(root);
+        } catch (err) {
+          toast(err.message || "Failed to save sign-off", "error");
+        }
+      };
+      return;
+    }
+
+    const retractButton = target.closest('#btn-retract-signoff');
+    if (retractButton) {
+      if (await confirmDialog("Retract supervisor sign-off for this month?")) {
+        const monthKey = `${selYear}-${String(selMonth + 1).padStart(2, "0")}`;
+        try {
+          await store.retractMonthSignOff(monthKey);
+          toast("Sign-off retracted", "info");
+          refreshDtr(root);
+        } catch (err) {
+          toast(err.message || "Failed to retract sign-off", "error");
+        }
+      }
+      return;
+    }
+
+        const printButton = target.closest('#btn-print-dtr');
     if (printButton) {
       window.print();
       return;
@@ -245,8 +323,10 @@ function bindDtrEvents(root) {
 
     const exportPdfButton = target.closest('#btn-export-pdf');
     if (exportPdfButton) {
+      const monthKey = `${selYear}-${String(selMonth + 1).padStart(2, "0")}`;
+      const signOff = store.getMonthSignOff(monthKey);
       const { exportDTRtoPDF } = await import('../lib/export-pdf.js');
-      exportDTRtoPDF(getVisibleEntries(), store.getHolidaysInMonth(selYear, selMonth), selMonth, selYear, store.state.profile, store.state.settings, store.username);
+      exportDTRtoPDF(getVisibleEntries(), store.getHolidaysInMonth(selYear, selMonth), selMonth, selYear, store.state.profile, store.state.settings, store.username, signOff);
       return;
     }
 

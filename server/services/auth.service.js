@@ -83,3 +83,34 @@ export async function login({ username, password }) {
 
   return { status: 200, body: await issueAuthResponse(user) };
 }
+
+export async function changePassword(userId, { currentPassword, newPassword } = {}) {
+  const current = String(currentPassword || "");
+  const next = String(newPassword || "");
+
+  if (!current || !next) {
+    throw new ValidationError("Current password and new password are required");
+  }
+  if (next.length < MIN_PASSWORD_LENGTH || next.length > MAX_PASSWORD_LENGTH) {
+    throw new ValidationError(`Password must be ${MIN_PASSWORD_LENGTH} to ${MAX_PASSWORD_LENGTH} characters`);
+  }
+
+  const user = await User.findById(userId);
+  if (!user) return { status: 404, body: { error: "User not found" } };
+
+  let verified = false;
+  if (isHashedPassword(user.password)) {
+    verified = await verifyPassword(current, user.password);
+    if (!verified && user.password === current) {
+      verified = true;
+    }
+  } else {
+    verified = user.password === current;
+  }
+
+  if (!verified) return { status: 401, body: { error: "Current password is incorrect" } };
+
+  user.password = await hashPassword(next);
+  await user.save();
+  return { status: 200, body: { success: true, message: "Password changed successfully" } };
+}
