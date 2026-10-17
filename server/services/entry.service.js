@@ -13,7 +13,7 @@ import { cleanEntryForAudit } from './snapshots.js';
 import { ValidationError } from '../routes/errors.js';
 
 async function getUserSettings(userId, session = null) {
-  const query = Config.findOne({ userId });
+  const query = Config.findOne({ userId }).select('settings');
   if (session) query.session(session);
   const config = await query.lean();
   return normalizeSettings(config?.settings || DEFAULT_SETTINGS);

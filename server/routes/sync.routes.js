@@ -11,7 +11,7 @@ const router = Router();
 router.get('/', async (req, res, next) => {
   const { userId, authToken } = req.query;
   try {
-    const user = userId && authToken ? await User.findById(userId).lean() : null;
+    const user = userId && authToken ? await User.findById(userId).select('authTokenHash').lean() : null;
     if (!user?.authTokenHash || !verifyAuthToken(user.authTokenHash, authToken)) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
