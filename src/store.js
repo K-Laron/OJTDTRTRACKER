@@ -123,6 +123,8 @@ class Store {
     this.attendanceCache = new Map();
     this.forecastCache = null;
     this.forecastCacheKey = '';
+    this.currentWeekHoursCache = null;
+    this.currentWeekHoursCacheKey = '';
     this.trendDataCache = null;
     this.trendDataCacheVersion = -1;
     this.pendingLocalSyncSkips = 0;
@@ -875,7 +877,7 @@ class Store {
   }
 
   getCompletionForecast(today = toLocalDateString(new Date())) {
-    const cacheKey = `${this.getResourceVersion('entries')}:${this.getResourceVersion('config')}:${today}`;
+    const cacheKey = `${this.getResourceVersion('entries')}:${this.getResourceVersion('holidays')}:${this.getResourceVersion('config')}:${today}`;
     if (this.forecastCacheKey === cacheKey) {
       return this.forecastCache;
     }
@@ -897,8 +899,19 @@ class Store {
     });
   }
 
-  getCurrentWeekHours() {
-    return computeCurrentWeekHours(this.state.entries, normalizeEntryStatus);
+  getCurrentWeekHours(now = new Date()) {
+    const entriesVersion = this.getResourceVersion('entries');
+    const dayOfWeek = now.getDay();
+    const monday = new Date(now);
+    monday.setDate(now.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
+    const mondayStr = `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, '0')}-${String(monday.getDate()).padStart(2, '0')}`;
+    const cacheKey = `${entriesVersion}:${mondayStr}`;
+    if (this.currentWeekHoursCacheKey === cacheKey && this.currentWeekHoursCache !== null) {
+      return this.currentWeekHoursCache;
+    }
+    this.currentWeekHoursCache = computeCurrentWeekHours(this.state.entries, normalizeEntryStatus, now);
+    this.currentWeekHoursCacheKey = cacheKey;
+    return this.currentWeekHoursCache;
   }
 
   getDataQualityAlerts() {

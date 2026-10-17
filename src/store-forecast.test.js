@@ -43,3 +43,47 @@ test('store forecast returns shared scenario, confidence and suggestion fields',
   assert.deepEqual(forecast.excludedDates, [{ date: '2026-04-07', status: 'holiday' }]);
   assert.ok(forecast.suggestions.length > 0);
 });
+test('store forecast cache invalidates when holidays version changes', async () => {
+  installBrowserStubs();
+  const { store } = await import('./store.js');
+
+  store.state.settings.requiredHours = 100;
+  store.state.entries = [workedDay('2026-04-06', 8)];
+  store.state.holidays = [];
+  store._markResourcesChanged(['entries', 'holidays', 'config']);
+
+  const initial = store.getCompletionForecast('2026-04-06');
+  assert.equal(initial.excludedDates.length, 0);
+
+  // Add a holiday and bump only holidays version
+  store.state.holidays = [{ date: '2026-04-08', type: 'holiday' }];
+  store._markResourcesChanged(['holidays']);
+
+  const updated = store.getCompletionForecast('2026-04-06');
+  assert.equal(updated.excludedDates.length, 1);
+  assert.equal(updated.excludedDates[0].date, '2026-04-08');
+});
+
+test('store getCurrentWeekHours memoizes across invocations and invalidates on entries change or date change', async () => {
+  installBrowserStubs();
+  const { store } = await import('./store.js');
+
+  store.state.entries = [
+    workedDay('2026-04-06', 8), // Monday
+    workedDay('2026-04-07', 4), // Tuesday
+  ];
+  store._markResourcesChanged(['entries']);
+
+  const wednesday = new Date('2026-04-08T12:00:00');
+  const first = store.getCurrentWeekHours(wednesday);
+  assert.equal(first, 12);
+
+  // Second invocation returns memoized value
+  const second = store.getCurrentWeekHours(wednesday);
+  assert.equal(second, 12);
+
+  // Next week date returns 0 and updates cache
+  const nextWeek = new Date('2026-04-15T12:00:00');
+  const third = store.getCurrentWeekHours(nextWeek);
+  assert.equal(third, 0);
+});
