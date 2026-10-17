@@ -45,6 +45,7 @@ test('requireAuth rejects missing x-auth-token header', async () => {
 
 test('requireAuth rejects non-existent user', async () => {
   const findMock = mock.method(User, 'findById', () => ({
+    select() { return this; },
     lean: async () => null,
   }));
 
@@ -64,6 +65,7 @@ test('requireAuth rejects non-existent user', async () => {
 
 test('requireAuth rejects mismatched auth token', async () => {
   const findMock = mock.method(User, 'findById', (id) => ({
+    select() { return this; },
     lean: async () => ({ _id: id, authTokenHash: hashAuthToken('correct-token') }),
   }));
 
@@ -84,6 +86,7 @@ test('requireAuth rejects mismatched auth token', async () => {
 test('requireAuth passes and sets req.userId when token matches', async () => {
   const validToken = 'valid-session-token-999';
   const findMock = mock.method(User, 'findById', (id) => ({
+    select() { return this; },
     lean: async () => ({ _id: id, authTokenHash: hashAuthToken(validToken) }),
   }));
 
@@ -104,6 +107,7 @@ test('requireAuth passes and sets req.userId when token matches', async () => {
 test('requireAuth forwards unexpected database errors to next', async () => {
   const dbError = new Error('Database connection failed');
   const findMock = mock.method(User, 'findById', () => ({
+    select() { return this; },
     lean: async () => { throw dbError; },
   }));
 
@@ -134,6 +138,7 @@ test('requireAuth rejects expired session tokens with 401 Session expired', asyn
   const token = 'expired-token-123';
   const thirtyOneDaysAgo = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
   const findMock = mock.method(User, 'findById', (id) => ({
+    select() { return this; },
     lean: async () => ({
       _id: id,
       authTokenHash: hashAuthToken(token),
@@ -150,6 +155,33 @@ test('requireAuth rejects expired session tokens with 401 Session expired', asyn
     assert.equal(res.statusCode, 401);
     assert.deepEqual(res.payload, { error: 'Session expired' });
     assert.equal(nextCalled, false);
+  } finally {
+    findMock.mock.restore();
+  }
+});
+
+test('requireAuth uses targeted field projection on User query', async () => {
+  let projectedFields = null;
+  const findMock = mock.method(User, 'findById', (id) => ({
+    select(fields) {
+      projectedFields = fields;
+      return this;
+    },
+    lean: async () => ({
+      _id: id,
+      authTokenHash: hashAuthToken('test-token'),
+      authTokenCreatedAt: new Date(),
+    }),
+  }));
+
+  const req = { headers: { 'x-user-id': 'user123', 'x-auth-token': 'test-token' } };
+  const res = createMockRes();
+  let nextCalled = false;
+
+  try {
+    await requireAuth(req, res, () => { nextCalled = true; });
+    assert.equal(nextCalled, true);
+    assert.equal(projectedFields, 'authTokenHash authTokenCreatedAt');
   } finally {
     findMock.mock.restore();
   }

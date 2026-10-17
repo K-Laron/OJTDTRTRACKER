@@ -47,7 +47,7 @@ function getRequestedHolidaySyncYears(query = {}, config) {
 
 export async function listHolidays(userId, query = {}) {
   const [config, existingHolidays] = await Promise.all([
-    Config.findOne({ userId }).lean(),
+    Config.findOne({ userId }).select('profile.startDate').lean(),
     Holiday.find({ userId }).sort({ date: 1 }).lean(),
   ]);
 

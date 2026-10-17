@@ -18,7 +18,7 @@ export async function requireAuth(req, res, next) {
   if (!userId || !authToken) return res.status(401).json({ error: 'Unauthorized' });
 
   try {
-    const user = await User.findById(userId).lean();
+    const user = await User.findById(userId).select('authTokenHash authTokenCreatedAt').lean();
     if (!user?.authTokenHash || !verifyAuthToken(user.authTokenHash, authToken)) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
