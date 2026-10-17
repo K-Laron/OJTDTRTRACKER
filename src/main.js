@@ -263,7 +263,6 @@ async function renderPage(path) {
 
   if (token !== renderToken || normalizedPath !== getActivePath()) return;
 
-  updateShellChrome(normalizedPath);
   if (currentRenderedPath === normalizedPath && currentPageModule === pageModule && typeof pageModule.update === 'function') {
     pageModule.update(pageContentEl);
     return;
