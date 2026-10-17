@@ -56,9 +56,8 @@ function renderOverview() {
 
 function renderSummaryPack() {
   const entries = store.getAllEntriesWithDerivedStatus();
-  const sorted = [...entries].sort((a, b) => a.date.localeCompare(b.date));
-  const dateFrom = sorted[0]?.date;
-  const dateTo = sorted[sorted.length - 1]?.date;
+  const dateFrom = entries.length ? entries[entries.length - 1].date : undefined;
+  const dateTo = entries.length ? entries[0].date : undefined;
   const pack = store.getSummaryPack({ dateFrom, dateTo });
 
   return `
