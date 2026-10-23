@@ -101,6 +101,20 @@ cd .\server
 node .\server.js
 ```
 
+## Verification
+
+Drive the real app in an isolated stack with its own MongoDB database and ports 27019, 5010, and 5180:
+
+```powershell
+npm ci
+npx playwright install chromium
+npm run verify -- run auth
+```
+
+`run` accepts `auth`, `time-log`, `dashboard`, `dtr-export`, or `settings-backup`. It starts the stack when none is healthy, drives the feature through Playwright, writes screenshots and downloads to `output/verification/`, and tears the stack down. Use `npm run verify -- launch` and `npm run verify -- stop` to keep a stack for manual checks.
+
+The Docker requirement, environment overrides, evidence standards, and the maintained feature map live in `.agents/skills/verify-ojt-dtr-tracker/SKILL.md`.
+
 ## MongoDB Connection Modes
 
 Launcher mode and manual mode are different on purpose:

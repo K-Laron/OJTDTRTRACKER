@@ -7,9 +7,11 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test"
+    "test": "node --test",
+    "verify": "node .agents/skills/verify-ojt-dtr-tracker/scripts/verify.mjs"
   },
   "devDependencies": {
+    "playwright": "^1.64.1",
     "vite": "^6.2.0"
   },
   "dependencies": {

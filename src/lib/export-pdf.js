@@ -30,7 +30,7 @@ function toRowValues(row) {
   ];
 }
 
-export function exportDTRtoPDF(entries, holidays, month, year, profile, settings, username = '') {
+export function exportDTRtoPDF(entries, holidays, month, year, profile, settings, username = '', signOff = null) {
   try {
     const sheet = buildDtrSheetModel({ entries, holidays, month, year, profile, settings });
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
